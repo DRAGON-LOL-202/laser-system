@@ -1,0 +1,44 @@
+name: تهيئة قاعدة البيانات (Import database.sql)
+
+# يعمل فقط عند تشغيله يدوياً من تبويب Actions في GitHub — لا يعمل تلقائياً أبداً
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'اكتب كلمة yes للتأكيد أنك تريد رفع/تحديث هيكل قاعدة البيانات الآن'
+        required: true
+        default: 'no'
+
+jobs:
+  import-database:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'yes'
+    steps:
+      - name: تنزيل ملفات المشروع
+        uses: actions/checkout@v4
+
+      - name: تثبيت عميل MySQL
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: رفع هيكل قاعدة البيانات إلى الخادم
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" < database.sql
+          echo "✓ تم رفع هيكل قاعدة البيانات بنجاح"
+
+      - name: التحقق من الجداول التي تم إنشاؤها
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SHOW TABLES;"

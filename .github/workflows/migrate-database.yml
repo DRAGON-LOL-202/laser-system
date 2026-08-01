@@ -1,0 +1,34 @@
+name: ترقية قاعدة البيانات (migration_thumbnail.sql)
+
+# استخدم هذا فقط إذا كانت قاعدة بياناتك منشأة مسبقاً بالفعل (شغّلت import-database.yml قبل ذلك)
+# ولا تريد حذف بياناتك — هذا الملف فقط يضيف عمود صورة المعاينة الجديد
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'اكتب كلمة yes للتأكيد أنك تريد تشغيل ترقية قاعدة البيانات الآن'
+        required: true
+        default: 'no'
+
+jobs:
+  migrate-database:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'yes'
+    steps:
+      - name: تنزيل ملفات المشروع
+        uses: actions/checkout@v4
+
+      - name: تثبيت عميل MySQL
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: تشغيل ملف الترقية
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" < migration_thumbnail.sql
+          echo "✓ تمت الترقية بنجاح"
