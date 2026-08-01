@@ -478,9 +478,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     }
   };
 
-  const handleThumbInput=async(f,e)=>{
-    const file=e.target.files&&e.target.files[0];
-    e.target.value="";
+ const uploadThumbFile=async(f,file)=>{
     if(!file) return;
     setThumbUploadingId(f.id);
     try{
@@ -490,6 +488,24 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
       addToast(err.message||"فشل رفع صورة المعاينة",'error');
     }finally{
       setThumbUploadingId(null);
+    }
+  };
+
+  const handleThumbInput=async(f,e)=>{
+    const file=e.target.files&&e.target.files[0];
+    e.target.value="";
+    await uploadThumbFile(f,file);
+  };
+
+  const handleThumbPaste=async(f,e)=>{
+    const items=e.clipboardData&&e.clipboardData.items;
+    if(!items) return;
+    for(const item of items){
+      if(item.type&&item.type.startsWith("image/")){
+        const file=item.getAsFile();
+        if(file){ e.preventDefault(); await uploadThumbFile(f,file); }
+        break;
+      }
     }
   };
 
@@ -632,7 +648,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                   <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
                     <ThumbCell file={f} onOpen={onOpenImage}/>
                     <input ref={el=>thumbRefs.current[f.id]=el} type="file" accept="image/png,image/jpeg,image/webp" style={{display:"none"}} onChange={e=>handleThumbInput(f,e)}/>
-                    <button onClick={()=>thumbRefs.current[f.id]?.click()} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة":"إضافة صورة معاينة"}
+                   <button onClick={()=>thumbRefs.current[f.id]?.click()} onPaste={e=>handleThumbPaste(f,e)} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة (اضغط عليها ثم Ctrl+V للصق)":"إضافة صورة معاينة (اضغط عليها ثم Ctrl+V للصق)"} <button onClick={()=>thumbRefs.current[f.id]?.click()} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة":"إضافة صورة معاينة"}
                       style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:4,padding:"4px 5px",cursor:"pointer"}}>
                       {thumbUploadingId===f.id?<Spinner s={10}/>:<I n="ul" s={10}/>}
                     </button>
