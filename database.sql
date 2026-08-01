@@ -96,7 +96,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- كلمة المرور مشفرة بـ bcrypt — سيتم توليدها تلقائياً عند أول تشغيل من ملف seed.js
 -- هذا السطر فقط احتياطي في حال التشغيل اليدوي للـ SQL (كلمة المرور هنا = 214205 مشفرة):
 INSERT INTO `users` (`id`,`name`,`username`,`password`,`role`,`is_root`) VALUES
-(1,'المشرف الرئيسي','lol','$2b$10$rDxJZxQqQxJQqQxJQqQxJOzGZ5KZ5KZ5KZ5KZ5KZ5KZ5KZ5KZ5KZu','admin',1);
+(1,'المشرف الرئيسي','lol','$2a$10$eLlK55xPopuwP9OD0meLUegSlhhYctwU4I3xtt.sOn3nwZiAEMUx6','admin',1);
 -- ملاحظة: شغّل "node src/utils/seed.js" بعد رفع المشروع لتوليد الهاش الصحيح فعلياً وإدراج البيانات بأمان.
 
 INSERT INTO `machines` (`id`,`code`,`label`,`status`,`current_file`,`machine_time`) VALUES
