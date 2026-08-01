@@ -113,7 +113,7 @@ const Api = {
   setFileStatus(fileId,status,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/status",{method:"PATCH",body:{status,machineCode,machineLabel}}); },
   deleteFile(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId,{method:"DELETE",body:{machineCode,machineLabel}}); },
   reorderFiles(code,orderedIds){ return this.request("/api/machines/"+code+"/files/reorder",{method:"PATCH",body:{orderedIds}}); },
-  downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download"; },
+ downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download?token="+encodeURIComponent(this.token||""); },
   uploadThumbnail(fileId,file,machineCode,machineLabel){
     const fd=new FormData();
     fd.append("thumbnail",file);
