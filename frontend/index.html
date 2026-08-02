@@ -648,7 +648,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                   <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
                     <ThumbCell file={f} onOpen={onOpenImage}/>
                     <input ref={el=>thumbRefs.current[f.id]=el} type="file" accept="image/png,image/jpeg,image/webp" style={{display:"none"}} onChange={e=>handleThumbInput(f,e)}/>
-                   <button onClick={()=>thumbRefs.current[f.id]?.click()} onPaste={e=>handleThumbPaste(f,e)} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة (اضغط عليها ثم Ctrl+V للصق)":"إضافة صورة معاينة (اضغط عليها ثم Ctrl+V للصق)"} <button onClick={()=>thumbRefs.current[f.id]?.click()} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة":"إضافة صورة معاينة"}
+                   <button onClick={()=>thumbRefs.current[f.id]?.click()} onPaste={e=>handleThumbPaste(f,e)} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة (اضغط عليها ثم Ctrl+V للصق)":"إضافة صورة معاينة (اضغط عليها ثم Ctrl+V للصق)"}
                       style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:4,padding:"4px 5px",cursor:"pointer"}}>
                       {thumbUploadingId===f.id?<Spinner s={10}/>:<I n="ul" s={10}/>}
                     </button>
