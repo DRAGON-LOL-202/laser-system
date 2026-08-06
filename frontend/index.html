@@ -113,7 +113,7 @@ const Api = {
   setFileStatus(fileId,status,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/status",{method:"PATCH",body:{status,machineCode,machineLabel}}); },
   deleteFile(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId,{method:"DELETE",body:{machineCode,machineLabel}}); },
   reorderFiles(code,orderedIds){ return this.request("/api/machines/"+code+"/files/reorder",{method:"PATCH",body:{orderedIds}}); },
-  downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download"; },
+  downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download?token="+encodeURIComponent(this.token||""); },
   uploadThumbnail(fileId,file,machineCode,machineLabel){
     const fd=new FormData();
     fd.append("thumbnail",file);
@@ -299,7 +299,28 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
   const[editing,setEditing]=useState(false);
   const[val,setVal]=useState(file.textComment||"");
   const[busy,setBusy]=useState(false);
+  const[pos,setPos]=useState({top:0,left:0});
+  const btnRef=useRef(null);
   const has=file.hasTextComment;
+
+  const openMenu=()=>{
+    const r=btnRef.current.getBoundingClientRect();
+    const W=220;
+    setPos({top:r.bottom+6,left:Math.min(r.left,window.innerWidth-W-8)});
+    setOpen(true);
+  };
+  const closeMenu=()=>{setOpen(false);setEditing(false);};
+
+  useEffect(()=>{
+    if(!open) return;
+    const onScrollOrResize=()=>closeMenu();
+    window.addEventListener("scroll",onScrollOrResize,true);
+    window.addEventListener("resize",onScrollOrResize);
+    return()=>{
+      window.removeEventListener("scroll",onScrollOrResize,true);
+      window.removeEventListener("resize",onScrollOrResize);
+    };
+  },[open]);
 
   const save=async()=>{
     if(!val.trim()) return;
@@ -318,7 +339,7 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
   if(!has && canEdit){
     // مشرف بدون تعليق بعد: زر إضافة صغير باهت
     return (
-      <button onClick={()=>{setEditing(true);setOpen(true);setVal("");}}
+      <button ref={btnRef} onClick={()=>{setEditing(true);setVal("");openMenu();}}
         title="إضافة تعليق كتابي"
         style={{background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
         <I n="comment" s={11}/>
@@ -328,14 +349,14 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
 
   return (
     <div style={{position:"relative",display:"inline-block"}}>
-      <button onClick={()=>setOpen(p=>!p)} title="عرض التعليق الكتابي"
+      <button ref={btnRef} onClick={()=>{open?closeMenu():openMenu();}} title="عرض التعليق الكتابي"
         style={{background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
         <I n="comment" s={11}/>
       </button>
-      {open&&(
+      {open&&ReactDOM.createPortal(
         <>
-          <div onClick={()=>{setOpen(false);setEditing(false);}} style={{position:"fixed",inset:0,zIndex:60}}/>
-          <div style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:220,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+          <div onClick={closeMenu} style={{position:"fixed",inset:0,zIndex:9998}}/>
+          <div style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:220,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
             {editing?(
               <>
                 <textarea value={val} onChange={e=>setVal(e.target.value)} autoFocus rows={3}
@@ -357,7 +378,8 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
               </>
             )}
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );
@@ -369,10 +391,29 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
   const[recording,setRecording]=useState(false);
   const[busy,setBusy]=useState(false);
   const[playing,setPlaying]=useState(false);
+  const[pos,setPos]=useState({top:0,left:0});
+  const btnRef=useRef(null);
   const mediaRef=useRef(null);
   const chunksRef=useRef([]);
   const audioRef=useRef(null);
   const has=file.hasVoiceComment;
+
+  const openMenu=(w)=>{
+    const r=btnRef.current.getBoundingClientRect();
+    setPos({top:r.bottom+6,left:Math.min(r.left,window.innerWidth-w-8)});
+    setOpen(true);
+  };
+
+  useEffect(()=>{
+    if(!open) return;
+    const onScrollOrResize=()=>{ if(!recording) setOpen(false); };
+    window.addEventListener("scroll",onScrollOrResize,true);
+    window.addEventListener("resize",onScrollOrResize);
+    return()=>{
+      window.removeEventListener("scroll",onScrollOrResize,true);
+      window.removeEventListener("resize",onScrollOrResize);
+    };
+  },[open,recording]);
 
   const startRecording=async()=>{
     try{
@@ -416,14 +457,14 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
   if(!has && canEdit){
     return (
       <div style={{position:"relative",display:"inline-block"}}>
-        <button onClick={()=>setOpen(p=>!p)} title="إضافة تعليق صوتي"
+        <button ref={btnRef} onClick={()=>{open?setOpen(false):openMenu(170);}} title="إضافة تعليق صوتي"
           style={{background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
           <I n="mic" s={11}/>
         </button>
-        {open&&(
+        {open&&ReactDOM.createPortal(
           <>
-            <div onClick={()=>{ if(!recording) setOpen(false); }} style={{position:"fixed",inset:0,zIndex:60}}/>
-            <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:170,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+            <div onClick={()=>{ if(!recording) setOpen(false); }} style={{position:"fixed",inset:0,zIndex:9998}}/>
+            <div onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:170,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
               {busy?(
                 <div style={{color:"#94a3b8",fontSize:11,textAlign:"center"}}><Spinner s={14}/> جاري الرفع...</div>
               ):recording?(
@@ -436,7 +477,8 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
                 </button>
               )}
             </div>
-          </>
+          </>,
+          document.body
         )}
       </div>
     );
@@ -444,14 +486,14 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
 
   return (
     <div style={{position:"relative",display:"inline-block"}}>
-      <button onClick={()=>setOpen(p=>!p)} title="تشغيل التعليق الصوتي"
+      <button ref={btnRef} onClick={()=>{open?setOpen(false):openMenu(200);}} title="تشغيل التعليق الصوتي"
         style={{background:"#0f4c2a",color:"#4ade80",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
         <I n="mic" s={11}/>
       </button>
-      {open&&(
+      {open&&ReactDOM.createPortal(
         <>
-          <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
-          <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:200,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+          <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
+          <div onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:200,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
             <audio ref={audioRef} src={Api.voiceCommentUrl(file.id)} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} style={{display:"none"}}/>
             <button onClick={togglePlay} style={{width:"100%",background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
               <I n={playing?"pause":"play"} s={12}/> {playing?"إيقاف مؤقت":"تشغيل"}
@@ -467,7 +509,8 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
               </div>
             )}
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );
