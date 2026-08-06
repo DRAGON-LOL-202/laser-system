@@ -44,7 +44,7 @@ select option{background:#0d1224;color:#e2e8f0;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useCallback,useRef}=React;
+const {useState,useEffect,useLayoutEffect,useCallback,useRef}=React;
 
 /* ====================================================================
    إعدادات الاتصال بالسيرفر
@@ -306,11 +306,24 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
   const openMenu=()=>{
     const r=btnRef.current.getBoundingClientRect();
     const W=220;
-    setPos({top:r.bottom+6,left:Math.min(r.left,window.innerWidth-W-8)});
+    setPos({top:r.bottom+6,left:Math.min(Math.max(8,r.left),window.innerWidth-W-8)});
     setOpen(true);
   };
   const closeMenu=()=>{setOpen(false);setEditing(false);};
   const popupRef=useRef(null);
+
+  useLayoutEffect(()=>{
+    if(!open || !btnRef.current || !popupRef.current) return;
+    const r=btnRef.current.getBoundingClientRect();
+    const pr=popupRef.current.getBoundingClientRect();
+    let top=r.bottom+6;
+    if(top+pr.height>window.innerHeight-8){
+      top=Math.max(8,r.top-pr.height-6);
+    }
+    let left=Math.min(r.left,window.innerWidth-pr.width-8);
+    left=Math.max(8,left);
+    if(top!==pos.top||left!==pos.left) setPos({top,left});
+  },[open,editing]);
 
   useEffect(()=>{
     if(!open) return;
@@ -402,9 +415,23 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
 
   const openMenu=(w)=>{
     const r=btnRef.current.getBoundingClientRect();
-    setPos({top:r.bottom+6,left:Math.min(r.left,window.innerWidth-w-8)});
+    setPos({top:r.bottom+6,left:Math.min(Math.max(8,r.left),window.innerWidth-w-8)});
     setOpen(true);
   };
+  const popupRef=useRef(null);
+
+  useLayoutEffect(()=>{
+    if(!open || !btnRef.current || !popupRef.current) return;
+    const r=btnRef.current.getBoundingClientRect();
+    const pr=popupRef.current.getBoundingClientRect();
+    let top=r.bottom+6;
+    if(top+pr.height>window.innerHeight-8){
+      top=Math.max(8,r.top-pr.height-6);
+    }
+    let left=Math.min(r.left,window.innerWidth-pr.width-8);
+    left=Math.max(8,left);
+    if(top!==pos.top||left!==pos.left) setPos({top,left});
+  },[open,recording,busy]);
 
   useEffect(()=>{
     if(!open) return;
@@ -466,7 +493,7 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
         {open&&ReactDOM.createPortal(
           <>
             <div onClick={()=>{ if(!recording) setOpen(false); }} style={{position:"fixed",inset:0,zIndex:9998}}/>
-            <div onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:170,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+            <div ref={popupRef} onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:170,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
               {busy?(
                 <div style={{color:"#94a3b8",fontSize:11,textAlign:"center"}}><Spinner s={14}/> جاري الرفع...</div>
               ):recording?(
@@ -495,7 +522,7 @@ function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
       {open&&ReactDOM.createPortal(
         <>
           <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
-          <div onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:200,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+          <div ref={popupRef} onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:200,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
             <audio ref={audioRef} src={Api.voiceCommentUrl(file.id)} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} style={{display:"none"}}/>
             <button onClick={togglePlay} style={{width:"100%",background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
               <I n={playing?"pause":"play"} s={12}/> {playing?"إيقاف مؤقت":"تشغيل"}
