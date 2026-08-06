@@ -310,10 +310,14 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
     setOpen(true);
   };
   const closeMenu=()=>{setOpen(false);setEditing(false);};
+  const popupRef=useRef(null);
 
   useEffect(()=>{
     if(!open) return;
-    const onScrollOrResize=()=>closeMenu();
+    const onScrollOrResize=(e)=>{
+      if(popupRef.current && e.target && popupRef.current.contains(e.target)) return; // تجاهل التمرير داخل مربع النص نفسه
+      closeMenu();
+    };
     window.addEventListener("scroll",onScrollOrResize,true);
     window.addEventListener("resize",onScrollOrResize);
     return()=>{
@@ -354,7 +358,7 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
       {open&&ReactDOM.createPortal(
         <>
           <div onClick={closeMenu} style={{position:"fixed",inset:0,zIndex:9998}}/>
-          <div style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:220,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+          <div ref={popupRef} style={{position:"fixed",top:pos.top,left:pos.left,zIndex:9999,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:220,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
             {editing?(
               <>
                 <textarea value={val} onChange={e=>setVal(e.target.value)} autoFocus rows={3}
