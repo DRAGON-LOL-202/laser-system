@@ -1037,7 +1037,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                     </div>
                   )}
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
                     <ThumbCell file={f} onOpen={onOpenImage}/>
                     <input ref={el=>thumbRefs.current[f.id]=el} type="file" accept="image/png,image/jpeg,image/webp" style={{display:"none"}} onChange={e=>handleThumbInput(f,e)}/>
@@ -1047,13 +1047,13 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                     </button>
                   </div>
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   <TextCommentCell file={f} canEdit={true} onSave={saveComment} onDelete={deleteComment}/>
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   <VoiceCommentCell file={f} canEdit={true} onUpload={uploadVoice} onDelete={deleteVoice}/>
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   <select value={f.status} onChange={e=>updSt(f,e.target.value)}
                     style={{background:"#0a0e1a",border:"1px solid #1e2d4a",borderRadius:4,color:"#94a3b8",padding:"3px 3px",fontSize:10,cursor:"pointer",maxWidth:90}}>
                     <option value="WAITING">انتظار</option>
@@ -1062,7 +1062,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                     <option value="DELIVERED">تسليم</option>
                   </select>
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   {editTimeId===f.id?(
                     <div style={{display:"flex",gap:2,justifyContent:"center",alignItems:"center"}}>
                       <input value={editTimeVal} onChange={e=>setETV(e.target.value)} autoFocus
@@ -1079,7 +1079,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                     </span>
                   )}
                 </td>
-                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                <td style={{padding:"7px 8px",textAlign:"center"}} onMouseDown={e=>e.stopPropagation()}>
                   <div style={{display:"flex",gap:3,justifyContent:"center"}}>
                     <button onClick={()=>{sei(f.id);sen(f.name);}} title="تعديل"
                       style={{background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:4,padding:"4px 5px",cursor:"pointer"}}><I n="pen" s={10}/></button>
