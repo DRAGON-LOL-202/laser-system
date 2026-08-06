@@ -8,7 +8,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-const ALLOWED_EXT = ['.dxf', '.svg', '.ai', '.dwg', '.pdf', '.png', '.jpg', '.jpeg'];
+const ALLOWED_EXT = ['.dxf', '.svg', '.ai', '.dwg', '.pdf', '.png', '.jpg', '.jpeg', '.crv3d'];
 
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
@@ -19,7 +19,9 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-const maxSizeMB = parseInt(process.env.MAX_FILE_SIZE_MB || '20', 10);
+// الحد الأقصى: 100 ميجابايت (أقصى حجم مسموح فعلياً عبر بروكسي Render في الخطة المجانية،
+// رفعه أكثر من ذلك في الكود لن يكون له أثر لأن الطلب يُرفض من الاستضافة قبل وصوله للسيرفر)
+const maxSizeMB = parseInt(process.env.MAX_FILE_SIZE_MB || '100', 10);
 
 // عند تفعيل R2: نستخدم memoryStorage (الملف يبقى في الذاكرة كـ buffer لنرفعه بعدها يدوياً إلى R2)
 // عند عدم تفعيل R2: نستخدم diskStorage كما كان (وضع تطوير محلي فقط، الملفات ستُفقد على الاستضافات المجانية)
@@ -56,4 +58,20 @@ const uploadThumbnail = multer({
   limits: { fileSize: 8 * 1024 * 1024 }
 });
 
-module.exports = { upload, uploadThumbnail, UPLOAD_DIR, R2_ENABLED };
+// رافع منفصل خاص بالتعليقات الصوتية (webm/mp3/wav/ogg، حد أقصى 15 ميجابايت — يكفي لعدة دقائق تسجيل)
+const AUDIO_EXT = ['.webm', '.mp3', '.wav', '.ogg', '.m4a'];
+const audioFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (AUDIO_EXT.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error('التسجيل الصوتي يجب أن يكون من نوع WEBM أو MP3 أو WAV أو OGG'));
+  }
+};
+const uploadVoice = multer({
+  storage,
+  fileFilter: audioFileFilter,
+  limits: { fileSize: 15 * 1024 * 1024 }
+});
+
+module.exports = { upload, uploadThumbnail, uploadVoice, UPLOAD_DIR, R2_ENABLED };

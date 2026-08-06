@@ -124,6 +124,21 @@ const Api = {
   deleteThumbnail(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/thumbnail",{method:"DELETE",body:{machineCode,machineLabel}}); },
   thumbnailUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/thumbnail?token="+encodeURIComponent(this.token||""); },
 
+  setTextComment(fileId,text,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/comment",{method:"POST",body:{text,machineCode,machineLabel}}); },
+  deleteTextComment(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/comment",{method:"DELETE",body:{machineCode,machineLabel}}); },
+
+  uploadVoiceComment(fileId,blob,machineCode,machineLabel){
+    const fd=new FormData();
+    fd.append("voice",blob,"voice.webm");
+    fd.append("machineCode",machineCode);
+    fd.append("machineLabel",machineLabel);
+    return this.request("/api/machines/files/"+fileId+"/voice",{method:"POST",body:fd,isForm:true});
+  },
+  deleteVoiceComment(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/voice",{method:"DELETE",body:{machineCode,machineLabel}}); },
+  voiceCommentUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/voice?token="+encodeURIComponent(this.token||""); },
+
+  moveFile(fileId,targetMachineCode){ return this.request("/api/machines/files/"+fileId+"/move",{method:"PATCH",body:{targetMachineCode}}); },
+
   getLogs(){ return this.request("/api/logs"); },
   getNotifications(){ return this.request("/api/notifications"); },
   markAllRead(){ return this.request("/api/notifications/read-all",{method:"PATCH"}); },
@@ -168,6 +183,11 @@ function I({n,s=16}){
     spinner:<><path d="M21 12a9 9 0 1 1-6.219-8.56"/></>,
     image:<><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></>,
     zoomIn:<><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></>,
+    mic:<><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>,
+    micOff:<><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></>,
+    comment:<><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></>,
+    stop:<><rect x="6" y="6" width="12" height="12" rx="1"/></>,
+    inbox:<><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></>,
   };
   return <svg {...base}>{d[n]||null}</svg>;
 }
@@ -249,6 +269,206 @@ function ThumbCell({file,onOpen}){
       title="اضغط للمعاينة بالحجم الكامل"
       style={{width:36,height:36,borderRadius:6,overflow:"hidden",cursor:"zoom-in",margin:"0 auto",border:"1px solid #1e2d4a",position:"relative"}}>
       <img src={Api.thumbnailUrl(file.id)} alt={file.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+    </div>
+  );
+}
+
+/* ---- ألوان شريط الصف حسب الحالة ---- */
+function rowColorByStatus(status){
+  const map={
+    WAITING:  "rgba(148,163,184,0.06)",
+    WORKING:  "rgba(96,165,250,0.10)",
+    CUTTING:  "rgba(74,222,128,0.10)",
+    DELIVERED:"rgba(74,222,128,0.16)",
+  };
+  return map[status]||"transparent";
+}
+function rowBorderByStatus(status){
+  const map={
+    WAITING:  "#334155",
+    WORKING:  "#1e40af",
+    CUTTING:  "#166534",
+    DELIVERED:"#15803d",
+  };
+  return map[status]||"#1a2744";
+}
+
+/* ---- زر/مؤشر التعليق الكتابي: يظهر فقط إن وُجد تعليق (للجميع)، ونافذة تعديل (للمشرف) ---- */
+function TextCommentCell({file,canEdit,onSave,onDelete}){
+  const[open,setOpen]=useState(false);
+  const[editing,setEditing]=useState(false);
+  const[val,setVal]=useState(file.textComment||"");
+  const[busy,setBusy]=useState(false);
+  const has=file.hasTextComment;
+
+  const save=async()=>{
+    if(!val.trim()) return;
+    setBusy(true);
+    try{ await onSave(file,val.trim()); setEditing(false); }
+    finally{ setBusy(false); }
+  };
+  const remove=async()=>{
+    setBusy(true);
+    try{ await onDelete(file); setOpen(false); setEditing(false); }
+    finally{ setBusy(false); }
+  };
+
+  if(!has && !canEdit) return null; // المشغّل: لا يظهر شيء إن لم يوجد تعليق
+
+  if(!has && canEdit){
+    // مشرف بدون تعليق بعد: زر إضافة صغير باهت
+    return (
+      <button onClick={()=>{setEditing(true);setOpen(true);setVal("");}}
+        title="إضافة تعليق كتابي"
+        style={{background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
+        <I n="comment" s={11}/>
+      </button>
+    );
+  }
+
+  return (
+    <div style={{position:"relative",display:"inline-block"}}>
+      <button onClick={()=>setOpen(p=>!p)} title="عرض التعليق الكتابي"
+        style={{background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
+        <I n="comment" s={11}/>
+      </button>
+      {open&&(
+        <>
+          <div onClick={()=>{setOpen(false);setEditing(false);}} style={{position:"fixed",inset:0,zIndex:60}}/>
+          <div style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:220,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+            {editing?(
+              <>
+                <textarea value={val} onChange={e=>setVal(e.target.value)} autoFocus rows={3}
+                  style={{width:"100%",background:"#0a0e1a",border:"1px solid #f97316",borderRadius:6,padding:6,color:"#e2e8f0",fontSize:11,outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
+                <div style={{display:"flex",gap:5,marginTop:6}}>
+                  <button onClick={save} disabled={busy||!val.trim()} style={{background:"#0f4c2a",color:"#4ade80",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11,flex:1}}>{busy?"...":"حفظ"}</button>
+                  <button onClick={()=>{setEditing(false);setVal(file.textComment||"");}} style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11}}>إلغاء</button>
+                </div>
+              </>
+            ):(
+              <>
+                <div style={{color:"#e2e8f0",fontSize:12,whiteSpace:"pre-wrap",wordBreak:"break-word",maxHeight:120,overflowY:"auto"}}>{file.textComment}</div>
+                {canEdit&&(
+                  <div style={{display:"flex",gap:5,marginTop:8,borderTop:"1px solid #1a2744",paddingTop:6}}>
+                    <button onClick={()=>setEditing(true)} style={{background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11,flex:1}}>تعديل</button>
+                    <button onClick={remove} disabled={busy} style={{background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11}}>حذف</button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---- زر/مشغّل التعليق الصوتي: يظهر فقط إن وُجد تسجيل (للجميع)، وتسجيل جديد (للمشرف) ---- */
+function VoiceCommentCell({file,canEdit,onUpload,onDelete}){
+  const[open,setOpen]=useState(false);
+  const[recording,setRecording]=useState(false);
+  const[busy,setBusy]=useState(false);
+  const[playing,setPlaying]=useState(false);
+  const mediaRef=useRef(null);
+  const chunksRef=useRef([]);
+  const audioRef=useRef(null);
+  const has=file.hasVoiceComment;
+
+  const startRecording=async()=>{
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      const rec=new MediaRecorder(stream);
+      chunksRef.current=[];
+      rec.ondataavailable=e=>chunksRef.current.push(e.data);
+      rec.onstop=async()=>{
+        const blob=new Blob(chunksRef.current,{type:"audio/webm"});
+        stream.getTracks().forEach(t=>t.stop());
+        setBusy(true);
+        try{ await onUpload(file,blob); setOpen(false); }
+        finally{ setBusy(false); }
+      };
+      rec.start();
+      mediaRef.current=rec;
+      setRecording(true);
+    }catch(e){
+      alert("تعذّر الوصول للميكروفون. تأكد من منح الإذن للموقع.");
+    }
+  };
+  const stopRecording=()=>{
+    mediaRef.current?.stop();
+    setRecording(false);
+  };
+
+  const togglePlay=()=>{
+    if(!audioRef.current) return;
+    if(playing){ audioRef.current.pause(); }
+    else{ audioRef.current.play(); }
+  };
+
+  const remove=async()=>{
+    setBusy(true);
+    try{ await onDelete(file); setOpen(false); }
+    finally{ setBusy(false); }
+  };
+
+  if(!has && !canEdit) return null;
+
+  if(!has && canEdit){
+    return (
+      <div style={{position:"relative",display:"inline-block"}}>
+        <button onClick={()=>setOpen(p=>!p)} title="إضافة تعليق صوتي"
+          style={{background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
+          <I n="mic" s={11}/>
+        </button>
+        {open&&(
+          <>
+            <div onClick={()=>{ if(!recording) setOpen(false); }} style={{position:"fixed",inset:0,zIndex:60}}/>
+            <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:170,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+              {busy?(
+                <div style={{color:"#94a3b8",fontSize:11,textAlign:"center"}}><Spinner s={14}/> جاري الرفع...</div>
+              ):recording?(
+                <button onClick={stopRecording} style={{width:"100%",background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                  <I n="stop" s={12}/> إيقاف وحفظ
+                </button>
+              ):(
+                <button onClick={startRecording} style={{width:"100%",background:"#f97316",color:"#fff",border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                  <I n="mic" s={12}/> بدء التسجيل
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{position:"relative",display:"inline-block"}}>
+      <button onClick={()=>setOpen(p=>!p)} title="تشغيل التعليق الصوتي"
+        style={{background:"#0f4c2a",color:"#4ade80",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
+        <I n="mic" s={11}/>
+      </button>
+      {open&&(
+        <>
+          <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
+          <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:"120%",left:0,zIndex:61,background:"#0d1224",border:"1px solid #1e3a5f",borderRadius:8,padding:10,width:200,boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+            <audio ref={audioRef} src={Api.voiceCommentUrl(file.id)} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} style={{display:"none"}}/>
+            <button onClick={togglePlay} style={{width:"100%",background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+              <I n={playing?"pause":"play"} s={12}/> {playing?"إيقاف مؤقت":"تشغيل"}
+            </button>
+            {canEdit&&(
+              <div style={{display:"flex",gap:5,marginTop:6}}>
+                {recording?(
+                  <button onClick={stopRecording} style={{flex:1,background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:5,padding:"5px",cursor:"pointer",fontSize:10}}>إيقاف وحفظ</button>
+                ):(
+                  <button onClick={startRecording} style={{flex:1,background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:5,padding:"5px",cursor:"pointer",fontSize:10}}>إعادة تسجيل</button>
+                )}
+                <button onClick={remove} disabled={busy} style={{background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:5,padding:"5px 8px",cursor:"pointer",fontSize:10}}>حذف</button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -370,15 +590,15 @@ function OpTable({files,title,onChanged,addToast,machineCode,machineLabel,onOpen
         <span style={{color:"#64748b",fontSize:11}}>{files.length} ملف</span>
       </div>
       <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:420}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:460}}>
           <thead><tr style={{background:"#0a0e1a",borderBottom:"1px solid #1e2d4a"}}>
-            {["#","اسم الملف","معاينة","الحالة","الوقت","تحميل"].map((h,i)=>(
+            {["#","اسم الملف","معاينة","تعليق","صوت","الحالة","الوقت","تحميل"].map((h,i)=>(
               <th key={h} style={{padding:"8px 10px",textAlign:i===1?"right":"center",color:"#64748b",fontWeight:600}}>{h}</th>
             ))}
           </tr></thead>
           <tbody>
             {files.map((f,i)=>(
-              <tr key={f.id} className="trh" style={{borderBottom:"1px solid #1a2744"}}>
+              <tr key={f.id} className="trh" style={{borderBottom:"1px solid #1a2744",background:rowColorByStatus(f.status),borderRight:"3px solid "+rowBorderByStatus(f.status)}}>
                 <td style={{padding:"9px 10px",textAlign:"center",color:"#475569"}}>{i+1}</td>
                 <td style={{padding:"9px 10px",color:"#e2e8f0",maxWidth:140}}>
                   <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
@@ -386,6 +606,12 @@ function OpTable({files,title,onChanged,addToast,machineCode,machineLabel,onOpen
                 </td>
                 <td style={{padding:"9px 10px",textAlign:"center"}}>
                   <ThumbCell file={f} onOpen={onOpenImage}/>
+                </td>
+                <td style={{padding:"9px 10px",textAlign:"center"}}>
+                  <TextCommentCell file={f} canEdit={false}/>
+                </td>
+                <td style={{padding:"9px 10px",textAlign:"center"}}>
+                  <VoiceCommentCell file={f} canEdit={false}/>
                 </td>
                 <td style={{padding:"9px 10px",textAlign:"center"}}>
                   <select value={f.status} disabled={busyId===f.id} onChange={e=>updSt(f,e.target.value)}
@@ -431,15 +657,18 @@ function OpTable({files,title,onChanged,addToast,machineCode,machineLabel,onOpen
 /* ---- ADMIN TABLE ---- */
 function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
   const[showAdd,ssa]=useState(false);
-  const[fname,sfn]=useState("");const[ftime,sft]=useState("00:08:00");
+  const[fname,sfn]=useState("");const[ftime,sft]=useState("00:00:00");
   const[dragIdx,sdi]=useState(null);
   const[editId,sei]=useState(null);const[editName,sen]=useState("");
   const[editTimeId,setETI]=useState(null);const[editTimeVal,setETV]=useState("");
   const[busy,sBusy]=useState(false);
   const[uploading,sUploading]=useState(false);
   const[thumbUploadingId,setThumbUploadingId]=useState(null);
+  const[externalDrag,setExternalDrag]=useState(false);
+  const[pasteTargetId,setPasteTargetId]=useState(null);
   const fileRef=useRef();
   const thumbRefs=useRef({});
+  const dragCounter=useRef(0);
   const run=machine.status==="RUNNING";
 
   const wrap=async(fn)=>{
@@ -460,22 +689,27 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     sfn("");ssa(false);
   });
 
-  const handleFileInput=async(e)=>{
-    const files=Array.from(e.target.files||[]);
-    e.target.value="";
+  const uploadFiles=async(fileList)=>{
+    const files=Array.from(fileList||[]);
     if(files.length===0) return;
     sUploading(true);
     try{
       for(const f of files){
-        await Api.uploadFile(machine.code,f,ftime);
+        await Api.uploadFile(machine.code,f,"00:00:00");
       }
       await onChanged();
       ssa(false);
+      addToast(files.length>1?`تم رفع ${files.length} ملفات بنجاح`:"تم رفع الملف بنجاح",'success');
     }catch(err){
       addToast(err.message||"فشل رفع الملف",'error');
     }finally{
       sUploading(false);
     }
+  };
+
+  const handleFileInput=async(e)=>{
+    await uploadFiles(e.target.files);
+    e.target.value="";
   };
 
   const handleThumbInput=async(f,e)=>{
@@ -517,30 +751,59 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     setETI(null);
   });
 
+  const saveComment=async(f,text)=>{
+    try{
+      await Api.setTextComment(f.id,text,machine.code,title);
+      await onChanged();
+    }catch(e){
+      addToast(e.message||"فشل حفظ التعليق",'error');
+    }
+  };
+  const deleteComment=async(f)=>{
+    try{
+      await Api.deleteTextComment(f.id,machine.code,title);
+      await onChanged();
+    }catch(e){
+      addToast(e.message||"فشل حذف التعليق",'error');
+    }
+  };
+  const uploadVoice=async(f,blob)=>{
+    try{
+      await Api.uploadVoiceComment(f.id,blob,machine.code,title);
+      await onChanged();
+    }catch(e){
+      addToast(e.message||"فشل رفع التعليق الصوتي",'error');
+    }
+  };
+  const deleteVoice=async(f)=>{
+    try{
+      await Api.deleteVoiceComment(f.id,machine.code,title);
+      await onChanged();
+    }catch(e){
+      addToast(e.message||"فشل حذف التعليق الصوتي",'error');
+    }
+  };
+
   const download=(f)=>{
     if(!f.hasFile){ addToast("لا يوجد ملف فعلي للتحميل",'error'); return; }
     window.open(Api.downloadFileUrl(f.id),"_blank");
   };
 
-  const onDS=(i)=>sdi(i);
-  const onDO=(e,i)=>{ e.preventDefault(); if(dragIdx===null||dragIdx===i)return; sdi(i); };
-  const onDE=()=>wrap(async()=>{
-    if(dragIdx===null) return;
-    const orderedIds = machine.files.map(f=>f.id);
-    await Api.reorderFiles(machine.code,orderedIds);
-    await onChanged();
-    sdi(null);
-  });
-  // إعادة الترتيب البصري الفوري أثناء السحب (محلي فقط حتى يتم الإفلات)
   const [localFiles,setLocalFiles]=useState(machine.files);
   useEffect(()=>{ setLocalFiles(machine.files); },[machine.files]);
-  const onDOLive=(e,i)=>{
+
+  const onRowDragStart=(e,i,f)=>{
+    sdi(i);
+    e.dataTransfer.setData("text/plain", JSON.stringify({fileId:f.id, sourceCode:machine.code}));
+    e.dataTransfer.effectAllowed="move";
+  };
+  const onRowDragOverInternal=(e,i)=>{
     e.preventDefault();
     if(dragIdx===null||dragIdx===i) return;
     const arr=[...localFiles]; const[mv]=arr.splice(dragIdx,1); arr.splice(i,0,mv);
     setLocalFiles(arr); sdi(i);
   };
-  const onDEDrop=()=>wrap(async()=>{
+  const onRowDragEnd=()=>wrap(async()=>{
     if(dragIdx===null) return;
     const orderedIds = localFiles.map(f=>f.id);
     sdi(null);
@@ -548,19 +811,107 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     await onChanged();
   });
 
+  const isExternalFileDrag=(e)=> e.dataTransfer && Array.from(e.dataTransfer.types||[]).includes("Files");
+
+  const onContainerDragEnter=(e)=>{
+    e.preventDefault();
+    if(isExternalFileDrag(e)){
+      dragCounter.current++;
+      setExternalDrag(true);
+    }
+  };
+  const onContainerDragOver=(e)=>{
+    e.preventDefault();
+    if(isExternalFileDrag(e)) e.dataTransfer.dropEffect="copy";
+    else e.dataTransfer.dropEffect="move";
+  };
+  const onContainerDragLeave=(e)=>{
+    if(isExternalFileDrag(e)){
+      dragCounter.current--;
+      if(dragCounter.current<=0){ setExternalDrag(false); dragCounter.current=0; }
+    }
+  };
+  const onContainerDrop=async(e)=>{
+    e.preventDefault();
+    setExternalDrag(false);
+    dragCounter.current=0;
+
+    if(e.dataTransfer.files && e.dataTransfer.files.length>0){
+      await uploadFiles(e.dataTransfer.files);
+      return;
+    }
+
+    const raw=e.dataTransfer.getData("text/plain");
+    if(!raw) return;
+    let payload;
+    try{ payload=JSON.parse(raw); }catch(err){ return; }
+    if(!payload || !payload.fileId || payload.sourceCode===machine.code) return;
+
+    await wrap(async()=>{
+      await Api.moveFile(payload.fileId, machine.code);
+      addToast(`تم نقل الملف إلى ${title}`,'success');
+      await onChanged();
+    });
+  };
+
+  useEffect(()=>{
+    if(!pasteTargetId) return;
+    const handler=async(e)=>{
+      const items=e.clipboardData && e.clipboardData.items;
+      if(!items) return;
+      for(const item of items){
+        if(item.type && item.type.startsWith("image/")){
+          const blob=item.getAsFile();
+          if(!blob) continue;
+          const f=localFiles.find(x=>x.id===pasteTargetId);
+          if(!f) return;
+          setThumbUploadingId(pasteTargetId);
+          try{
+            await Api.uploadThumbnail(pasteTargetId, blob, machine.code, title);
+            await onChanged();
+            addToast("تم لصق الصورة كمعاينة بنجاح",'success');
+          }catch(err){
+            addToast(err.message||"فشل لصق الصورة",'error');
+          }finally{
+            setThumbUploadingId(null);
+            setPasteTargetId(null);
+          }
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste",handler);
+    return ()=>window.removeEventListener("paste",handler);
+  },[pasteTargetId,localFiles,machine.code,title]);
+
   return(
-    <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,overflow:"hidden",flex:1,minWidth:0,position:"relative"}}>
+    <div
+      onDragEnter={onContainerDragEnter}
+      onDragOver={onContainerDragOver}
+      onDragLeave={onContainerDragLeave}
+      onDrop={onContainerDrop}
+      style={{background:"#0d1224",border:"1px solid "+(externalDrag?"#f97316":"#1e2d4a"),borderRadius:12,overflow:"hidden",flex:1,minWidth:0,position:"relative",transition:"border-color 0.15s"}}>
       {busy&&(
         <div style={{position:"absolute",top:8,left:8,zIndex:5}}><Spinner s={16}/></div>
+      )}
+      {externalDrag&&(
+        <div style={{position:"absolute",inset:0,zIndex:20,background:"rgba(249,115,22,0.12)",backdropFilter:"blur(1px)",display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+          <div style={{background:"#0d1224",border:"2px dashed #f97316",borderRadius:12,padding:"18px 28px",display:"flex",flexDirection:"column",alignItems:"center",gap:6,color:"#f97316"}}>
+            <I n="ul" s={26}/>
+            <span style={{fontSize:13,fontWeight:600}}>أفلت الملف هنا لإضافته إلى {title}</span>
+          </div>
+        </div>
       )}
       <div style={{padding:"11px 14px",borderBottom:"1px solid #1e2d4a",background:"#0f1830"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:6,flexWrap:"wrap"}}>
           <span style={{fontWeight:700,color:"#f97316",fontSize:13}}>{title}</span>
           <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            <button onClick={toggle} disabled={busy}
-              style={{display:"inline-flex",alignItems:"center",gap:4,background:run?"#3f1515":"#0f4c2a",color:run?"#fca5a5":"#4ade80",border:"1px solid "+(run?"#ef4444":"#22c55e"),borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>
-              <I n={run?"pause":"play"} s={11}/>{run?"إيقاف":"تشغيل"}
-            </button>
+            {machine.code!=="queue"&&(
+              <button onClick={toggle} disabled={busy}
+                style={{display:"inline-flex",alignItems:"center",gap:4,background:run?"#3f1515":"#0f4c2a",color:run?"#fca5a5":"#4ade80",border:"1px solid "+(run?"#ef4444":"#22c55e"),borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>
+                <I n={run?"pause":"play"} s={11}/>{run?"إيقاف":"تشغيل"}
+              </button>
+            )}
             <button onClick={()=>ssa(p=>!p)}
               style={{display:"inline-flex",alignItems:"center",gap:4,background:"#1e3a5f",color:"#60a5fa",border:"1px solid #1e40af",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,whiteSpace:"nowrap"}}>
               <I n="plus" s={11}/> إضافة
@@ -568,7 +919,9 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
           </div>
         </div>
         <div style={{fontSize:11,color:"#64748b",display:"flex",gap:10,flexWrap:"wrap"}}>
-          <span>الحالة: <span style={{color:run?"#4ade80":"#fca5a5",fontWeight:600}}>{run?"قيد التشغيل":"متوقفة"}</span></span>
+          {machine.code!=="queue"&&(
+            <span>الحالة: <span style={{color:run?"#4ade80":"#fca5a5",fontWeight:600}}>{run?"قيد التشغيل":"متوقفة"}</span></span>
+          )}
           <span>الملف: <span style={{color:"#e2e8f0"}}>{machine.files.length>0?machine.files[0].name:(machine.currentFile||"—")}</span></span>
           <span>الوقت: <span style={{color:"#60a5fa",fontFamily:"monospace"}}>{machine.totalTime}</span></span>
         </div>
@@ -577,19 +930,19 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
             <div style={{fontSize:12,color:"#94a3b8",marginBottom:8,fontWeight:600}}>إضافة ملف جديد</div>
             <div style={{marginBottom:10,padding:"10px 12px",background:"#0d1224",border:"2px dashed #1e3a5f",borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
               <I n="clip" s={20}/>
-              <span style={{color:"#64748b",fontSize:12}}>رفع من الجهاز</span>
-              <input ref={fileRef} type="file" accept=".dxf,.svg,.ai,.dwg,.pdf,.png,.jpg" multiple style={{display:"none"}} onChange={handleFileInput}/>
+              <span style={{color:"#64748b",fontSize:12}}>اسحب ملفاً من جهازك مباشرة هنا، أو</span>
+              <input ref={fileRef} type="file" accept=".dxf,.svg,.ai,.dwg,.pdf,.png,.jpg,.crv3d" multiple style={{display:"none"}} onChange={handleFileInput}/>
               <button onClick={()=>fileRef.current.click()} disabled={uploading}
                 style={{background:"#f97316",color:"#fff",border:"none",borderRadius:6,padding:"7px 18px",cursor:"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:5}}>
                 {uploading?<><Spinner s={13} color="#fff"/> جاري الرفع...</>:<><I n="ul" s={13}/> اختر ملفاً من الجهاز</>}
               </button>
-              <div style={{fontSize:10,color:"#475569"}}>DXF • SVG • AI • DWG • PDF</div>
+              <div style={{fontSize:10,color:"#475569"}}>DXF • SVG • AI • DWG • PDF • CRV3D</div>
             </div>
             <div style={{fontSize:11,color:"#64748b",textAlign:"center",marginBottom:8}}>— أو أدخل الاسم يدوياً —</div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               <input value={fname} onChange={e=>sfn(e.target.value)} placeholder="اسم الملف.dxf"
                 style={{flex:1,minWidth:120,background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:6,padding:"7px 10px",color:"#e2e8f0",fontSize:12,outline:"none"}}/>
-              <input value={ftime} onChange={e=>sft(e.target.value)} placeholder="00:08:00"
+              <input value={ftime} onChange={e=>sft(e.target.value)} placeholder="00:00:00"
                 style={{width:86,background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:6,padding:"7px 8px",color:"#e2e8f0",fontSize:12,outline:"none",fontFamily:"monospace",direction:"ltr"}}/>
               <button onClick={()=>fname.trim()&&addByName(fname.trim())}
                 style={{background:"#f97316",color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>إضافة</button>
@@ -599,18 +952,31 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
           </div>
         )}
       </div>
-      <div style={{overflowX:"auto",maxHeight:320,overflowY:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:380}}>
+      <div style={{overflowX:"auto",maxHeight:360,overflowY:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:460}}>
           <thead><tr style={{background:"#0a0e1a",borderBottom:"1px solid #1e2d4a",position:"sticky",top:0,zIndex:1}}>
-            {["","اسم الملف","معاينة","الحالة","الوقت","إجراءات"].map((h,i)=>(
+            {["","اسم الملف","معاينة","تعليق","صوت","الحالة","الوقت","إجراءات"].map((h,i)=>(
               <th key={i} style={{padding:"7px 8px",textAlign:i===1?"right":"center",color:"#64748b",fontWeight:600}}>{h}</th>
             ))}
           </tr></thead>
           <tbody>
+            {localFiles.length===0&&(
+              <tr><td colSpan={8} style={{padding:24,textAlign:"center",color:"#334155",fontSize:12}}>
+                {machine.code==="queue"?"لا توجد ملفات في قائمة الانتظار — اسحب ملفاً هنا أو اضغط «إضافة»":"لا توجد ملفات بعد"}
+              </td></tr>
+            )}
             {localFiles.map((f,i)=>(
               <tr key={f.id} className="drag-row trh"
-                draggable onDragStart={()=>onDS(i)} onDragOver={e=>onDOLive(e,i)} onDragEnd={onDEDrop}
-                style={{borderBottom:"1px solid #1a2744",background:dragIdx===i?"#1a2744":"transparent"}}>
+                draggable onDragStart={e=>onRowDragStart(e,i,f)} onDragOver={e=>onRowDragOverInternal(e,i)} onDragEnd={onRowDragEnd}
+                tabIndex={0}
+                onFocus={()=>setPasteTargetId(f.id)}
+                title={pasteTargetId===f.id?"جاهز للصق صورة (Ctrl+V)":"اضغط على الصف ثم Ctrl+V للصق صورة معاينة"}
+                style={{
+                  borderBottom:"1px solid #1a2744",
+                  background: dragIdx===i ? "#1a2744" : rowColorByStatus(f.status),
+                  borderRight: pasteTargetId===f.id ? "3px solid #f97316" : "3px solid "+rowBorderByStatus(f.status),
+                  outline:"none"
+                }}>
                 <td style={{padding:"7px 8px",textAlign:"center",color:"#475569"}}><I n="dots" s={14}/></td>
                 <td style={{padding:"7px 8px",color:"#e2e8f0",maxWidth:130}}>
                   {editId===f.id?(
@@ -632,11 +998,17 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
                   <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
                     <ThumbCell file={f} onOpen={onOpenImage}/>
                     <input ref={el=>thumbRefs.current[f.id]=el} type="file" accept="image/png,image/jpeg,image/webp" style={{display:"none"}} onChange={e=>handleThumbInput(f,e)}/>
-                    <button onClick={()=>thumbRefs.current[f.id]?.click()} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة":"إضافة صورة معاينة"}
+                    <button onClick={()=>thumbRefs.current[f.id]?.click()} disabled={thumbUploadingId===f.id} title={f.hasThumbnail?"تغيير الصورة (أو اضغط الصف والصق Ctrl+V)":"إضافة صورة معاينة (أو اضغط الصف والصق Ctrl+V)"}
                       style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:4,padding:"4px 5px",cursor:"pointer"}}>
                       {thumbUploadingId===f.id?<Spinner s={10}/>:<I n="ul" s={10}/>}
                     </button>
                   </div>
+                </td>
+                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                  <TextCommentCell file={f} canEdit={true} onSave={saveComment} onDelete={deleteComment}/>
+                </td>
+                <td style={{padding:"7px 8px",textAlign:"center"}}>
+                  <VoiceCommentCell file={f} canEdit={true} onUpload={uploadVoice} onDelete={deleteVoice}/>
                 </td>
                 <td style={{padding:"7px 8px",textAlign:"center"}}>
                   <select value={f.status} onChange={e=>updSt(f,e.target.value)}
@@ -684,7 +1056,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
 }
 
 /* ---- ADMIN DASH ---- */
-function AdminDash({big,small,onChanged,addToast,onOpenImage}){
+function AdminDash({big,small,queue,onChanged,addToast,onOpenImage}){
   return(
     <div>
       <h2 style={{color:"#e2e8f0",fontSize:18,fontWeight:700,marginBottom:14,marginTop:0}}>لوحة تحكم المشرف</h2>
@@ -692,10 +1064,20 @@ function AdminDash({big,small,onChanged,addToast,onOpenImage}){
         <MCard m={big} label="ماكينة كبيرة - CNC CO2"/>
         <MCard m={small} label="ماكينة صغيرة - CNC CO2"/>
       </div>
-      <div className="mobile-stack" style={{display:"flex",gap:12}}>
+      <div className="mobile-stack" style={{display:"flex",gap:12,marginBottom:14}}>
         <AdminTable machine={big} title="الماكينة الكبيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
         <AdminTable machine={small} title="الماكينة الصغيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
       </div>
+      {queue&&(
+        <div style={{marginTop:4}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <I n="inbox" s={16}/>
+            <span style={{color:"#f97316",fontWeight:700,fontSize:14}}>قائمة الانتظار</span>
+            <span style={{color:"#475569",fontSize:11}}>— مكان مؤقت لرفع الملفات قبل توزيعها؛ اسحب أي ملف من هنا إلى إحدى الماكينتين (غير ظاهرة للمشغّل)</span>
+          </div>
+          <AdminTable machine={queue} title="قائمة الانتظار" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -962,6 +1344,7 @@ function App(){
   const[logs,sl]=useState([]);
   const[big,sb]=useState(null);
   const[small,ss]=useState(null);
+  const[queue,sq]=useState(null);
   const[booting,sBooting]=useState(true);
   const[authErr,sAuthErr]=useState("");
   const[toasts,sToasts]=useState([]);
@@ -978,7 +1361,7 @@ function App(){
   const refreshMachines=useCallback(async()=>{
     try{
       const data=await Api.getMachines();
-      sb(data.big); ss(data.small);
+      sb(data.big); ss(data.small); sq(data.queue||null);
     }catch(e){ addToast(e.message,'error'); }
   },[addToast]);
 
@@ -1035,6 +1418,7 @@ function App(){
     socket.on("machine:update",(updated)=>{
       if(updated.code==="big") sb(updated);
       else if(updated.code==="small") ss(updated);
+      else if(updated.code==="queue") sq(updated);
     });
     socket.on("log:new",(log)=>{
       sl(p=>[log,...p].slice(0,200));
@@ -1061,7 +1445,7 @@ function App(){
     await Api.logout();
     Api.setToken(null);
     su(null); sp("login");
-    sb(null); ss(null); sl([]); sn([]); sus([]);
+    sb(null); ss(null); sq(null); sl([]); sn([]); sus([]);
     if(socketRef.current) socketRef.current.disconnect();
   };
 
@@ -1184,7 +1568,7 @@ function App(){
 
         {/* CONTENT */}
         <div style={{flex:1,overflow:"auto",padding:14}}>
-          {page==="admin"&&<AdminDash big={big} small={small} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc}/>}
+          {page==="admin"&&<AdminDash big={big} small={small} queue={queue} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc}/>}
           {page==="operator"&&<OpDash big={big} small={small} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc}/>}
           {page==="users"&&user?.role==="admin"&&<UsersPage users={users} currentUser={user} onChanged={onUserChanged} addToast={addToast}/>}
           {page==="logs"&&user?.role==="admin"&&<LogsPage logs={logs} currentUser={user}/>}

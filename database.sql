@@ -23,12 +23,12 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
--- جدول الماكينات (ثابت: ماكينتان فقط - كبيرة وصغيرة)
+-- جدول الماكينات (ماكينتان فعليتان + قائمة انتظار مؤقتة)
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `machines`;
 CREATE TABLE `machines` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `code` ENUM('big','small') NOT NULL COMMENT 'معرف ثابت للماكينة',
+  `code` ENUM('big','small','queue') NOT NULL COMMENT 'معرف ثابت؛ queue = قائمة انتظار مؤقتة لا تظهر للمشغل',
   `label` VARCHAR(100) NOT NULL,
   `status` ENUM('RUNNING','STOPPED') NOT NULL DEFAULT 'STOPPED',
   `current_file` VARCHAR(255) DEFAULT NULL,
@@ -52,6 +52,8 @@ CREATE TABLE `machine_files` (
   `original_filename` VARCHAR(255) DEFAULT NULL,
   `file_size` INT UNSIGNED DEFAULT NULL COMMENT 'بالبايت',
   `thumbnail_filename` VARCHAR(255) DEFAULT NULL COMMENT 'اسم صورة المعاينة المخزنة (يرفعها المشرف فقط)',
+  `text_comment` TEXT DEFAULT NULL COMMENT 'تعليق كتابي يضيفه المشرف',
+  `voice_comment_filename` VARCHAR(255) DEFAULT NULL COMMENT 'اسم ملف التسجيل الصوتي المخزن (يضيفه المشرف)',
   `sort_order` INT NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -101,7 +103,8 @@ INSERT INTO `users` (`id`,`name`,`username`,`password`,`role`,`is_root`) VALUES
 
 INSERT INTO `machines` (`id`,`code`,`label`,`status`,`current_file`,`machine_time`) VALUES
 (1,'big','ماكينة كبيرة - CNC CO2','STOPPED','sign.svg',0),
-(2,'small','ماكينة صغيرة - CNC CO2','RUNNING','keychain.dxf',0);
+(2,'small','ماكينة صغيرة - CNC CO2','RUNNING','keychain.dxf',0),
+(3,'queue','قائمة الانتظار','STOPPED',NULL,0);
 
 INSERT INTO `machine_files` (`machine_id`,`name`,`status`,`time_seconds`,`sort_order`) VALUES
 (1,'wooden_sign.svg','DELIVERED',5100,1),

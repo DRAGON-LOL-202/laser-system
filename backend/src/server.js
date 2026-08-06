@@ -42,6 +42,10 @@ io.on('connection', (socket) => {
   if (socket.user) {
     markOnline(socket.user.id, socket.id);
     io.emit('presence:update', { userId: socket.user.id, online: true });
+    // المشرفون فقط ينضمون لغرفة خاصة تستقبل تحديثات قائمة الانتظار (لا يجب أن يصل بثّها لغير المشرفين إطلاقاً)
+    if (socket.user.role === 'admin') {
+      socket.join('admins');
+    }
   }
 
   socket.on('disconnect', () => {
