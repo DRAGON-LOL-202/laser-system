@@ -8,6 +8,4 @@
 // أثناء التطوير المحلي اتركها كما هي:
 //   API_BASE: "http://localhost:5000"
 // ====================================================================
-window.APP_CONFIG = {
-  API_BASE: "http://localhost:5000"
-};
+API_BASE: "https://laser-system.onrender.com"
