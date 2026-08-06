@@ -336,21 +336,19 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
 
   if(!has && !canEdit) return null; // المشغّل: لا يظهر شيء إن لم يوجد تعليق
 
-  if(!has && canEdit){
-    // مشرف بدون تعليق بعد: زر إضافة صغير باهت
-    return (
-      <button ref={btnRef} onClick={()=>{setEditing(true);setVal("");openMenu();}}
-        title="إضافة تعليق كتابي"
-        style={{background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
-        <I n="comment" s={11}/>
-      </button>
-    );
-  }
+  const isAddNew = !has && canEdit;
 
   return (
     <div style={{position:"relative",display:"inline-block"}}>
-      <button ref={btnRef} onClick={()=>{open?closeMenu():openMenu();}} title="عرض التعليق الكتابي"
-        style={{background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
+      <button ref={btnRef}
+        onClick={()=>{
+          if(open){ closeMenu(); }
+          else{ if(isAddNew){ setEditing(true); setVal(""); } openMenu(); }
+        }}
+        title={isAddNew?"إضافة تعليق كتابي":"عرض التعليق الكتابي"}
+        style={isAddNew
+          ? {background:"transparent",color:"#334155",border:"1px dashed #334155",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}
+          : {background:"#1e3a5f",color:"#60a5fa",border:"none",borderRadius:4,padding:"3px 4px",cursor:"pointer",display:"inline-flex"}}>
         <I n="comment" s={11}/>
       </button>
       {open&&ReactDOM.createPortal(
@@ -363,7 +361,7 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
                   style={{width:"100%",background:"#0a0e1a",border:"1px solid #f97316",borderRadius:6,padding:6,color:"#e2e8f0",fontSize:11,outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
                 <div style={{display:"flex",gap:5,marginTop:6}}>
                   <button onClick={save} disabled={busy||!val.trim()} style={{background:"#0f4c2a",color:"#4ade80",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11,flex:1}}>{busy?"...":"حفظ"}</button>
-                  <button onClick={()=>{setEditing(false);setVal(file.textComment||"");}} style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11}}>إلغاء</button>
+                  <button onClick={()=>{ if(isAddNew){ closeMenu(); } else { setEditing(false); setVal(file.textComment||""); } }} style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:5,padding:"4px 9px",cursor:"pointer",fontSize:11}}>إلغاء</button>
                 </div>
               </>
             ):(
