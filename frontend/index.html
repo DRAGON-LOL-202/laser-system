@@ -113,7 +113,7 @@ const Api = {
   setFileStatus(fileId,status,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/status",{method:"PATCH",body:{status,machineCode,machineLabel}}); },
   deleteFile(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId,{method:"DELETE",body:{machineCode,machineLabel}}); },
   reorderFiles(code,orderedIds){ return this.request("/api/machines/"+code+"/files/reorder",{method:"PATCH",body:{orderedIds}}); },
-  downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download?token="+encodeURIComponent(this.token||""); },
+  downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download"; },
   uploadThumbnail(fileId,file,machineCode,machineLabel){
     const fd=new FormData();
     fd.append("thumbnail",file);
@@ -122,7 +122,7 @@ const Api = {
     return this.request("/api/machines/files/"+fileId+"/thumbnail",{method:"POST",body:fd,isForm:true});
   },
   deleteThumbnail(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/thumbnail",{method:"DELETE",body:{machineCode,machineLabel}}); },
-  thumbnailUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/thumbnail?token="+encodeURIComponent(this.token||""); },
+  thumbnailUrl(fileId,nonce){ return API_BASE+"/api/machines/files/"+fileId+"/thumbnail?token="+encodeURIComponent(this.token||"")+(nonce?"&v="+encodeURIComponent(nonce):""); },
 
   setTextComment(fileId,text,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/comment",{method:"POST",body:{text,machineCode,machineLabel}}); },
   deleteTextComment(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/comment",{method:"DELETE",body:{machineCode,machineLabel}}); },
@@ -150,6 +150,29 @@ function s2t(s){s=Math.max(0,s);return[Math.floor(s/3600),Math.floor((s%3600)/60
 function fmtLogTime(iso){
   try{ return new Date(iso).toLocaleTimeString("ar-EG",{hour12:false}); }
   catch(e){ return iso||""; }
+}
+
+/* ---- تحميل ملف فعلياً على الجهاز (بدل فتح تبويب جديد بالمتصفح) ----
+   ملاحظة مهمة: خاصية a[download] لا تعمل عبر الدومينات المختلفة (cross-origin) —
+   وهذا وضعنا الفعلي لأن الفرونت إند والباك إند على رابطين مختلفين على Render.
+   المتصفح في هذه الحالة يتجاهل download تماماً ويفتح الملف بدل تنزيله.
+   الحل الموثوق: نجلب الملف عبر fetch كـ Blob (مع توكن الدخول)، ثم ننشئ
+   رابط تحميل محلي من نفس أصل الصفحة (blob:) فيعمل التنزيل الفعلي دائماً. */
+async function triggerDownload(url, filename){
+  const res = await fetch(url, {
+    headers: Api.token ? { "Authorization": "Bearer "+Api.token } : {}
+  });
+  if(!res.ok) throw new Error("فشل تحميل الملف من السيرفر");
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = filename || "file";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(blobUrl), 4000);
 }
 
 /* ---- ICONS ---- */
@@ -264,11 +287,12 @@ function ThumbCell({file,onOpen}){
   if(!file.hasThumbnail){
     return <div style={{width:36,height:36,borderRadius:6,background:"#0a0e1a",border:"1px dashed #334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#334155",margin:"0 auto"}}><I n="image" s={14}/></div>;
   }
+  const src=Api.thumbnailUrl(file.id,file.thumbnailNonce);
   return (
-    <div onClick={()=>onOpen(Api.thumbnailUrl(file.id))}
+    <div onClick={()=>onOpen(src)}
       title="اضغط للمعاينة بالحجم الكامل"
       style={{width:36,height:36,borderRadius:6,overflow:"hidden",cursor:"zoom-in",margin:"0 auto",border:"1px solid #1e2d4a",position:"relative"}}>
-      <img src={Api.thumbnailUrl(file.id)} alt={file.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+      <img key={file.thumbnailNonce||file.id} src={src} alt={file.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
     </div>
   );
 }
@@ -312,6 +336,8 @@ function TextCommentCell({file,canEdit,onSave,onDelete}){
   const closeMenu=()=>{setOpen(false);setEditing(false);};
   const popupRef=useRef(null);
 
+  // إعادة حساب موضع القائمة المنبثقة بدقة بعد ظهورها فعلياً في الصفحة (عبر Portal)،
+  // لأن القائمة قد تُقص أو تظهر خارج حدود الجدول القابل للتمرير أفقياً/رأسياً إن لم تُحسب بدقة
   useLayoutEffect(()=>{
     if(!open || !btnRef.current || !popupRef.current) return;
     const r=btnRef.current.getBoundingClientRect();
@@ -625,9 +651,13 @@ function OpTable({files,title,onChanged,addToast,machineCode,machineLabel,onOpen
   const[editTimeId,setETI]=useState(null);const[editTimeVal,setETV]=useState("");
   const[busyId,setBusyId]=useState(null);
 
-  const download=(f)=>{
+  const download=async(f)=>{
     if(!f.hasFile){ addToast?addToast("لا يوجد ملف فعلي للتحميل",'error'):alert("لا يوجد ملف فعلي للتحميل"); return; }
-    window.open(Api.downloadFileUrl(f.id),"_blank");
+    try{
+      await triggerDownload(Api.downloadFileUrl(f.id), f.originalFilename||f.name);
+    }catch(e){
+      addToast?addToast(e.message||"فشل تحميل الملف",'error'):alert(e.message||"فشل تحميل الملف");
+    }
   };
 
   const updSt=async(f,status)=>{
@@ -856,9 +886,13 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     }
   };
 
-  const download=(f)=>{
+  const download=async(f)=>{
     if(!f.hasFile){ addToast("لا يوجد ملف فعلي للتحميل",'error'); return; }
-    window.open(Api.downloadFileUrl(f.id),"_blank");
+    try{
+      await triggerDownload(Api.downloadFileUrl(f.id), f.originalFilename||f.name);
+    }catch(e){
+      addToast(e.message||"فشل تحميل الملف",'error');
+    }
   };
 
   const [localFiles,setLocalFiles]=useState(machine.files);
