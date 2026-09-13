@@ -62,8 +62,10 @@ io.on('connection', (socket) => {
 app.use('/api/auth', require('./routes/auth')(io));
 app.use('/api/users', require('./routes/users')(io));
 app.use('/api/machines', require('./routes/machines')(io));
+app.use('/api/work', require('./routes/workdays')(io));
 app.use('/api/logs', require('./routes/logs')());
 app.use('/api/notifications', require('./routes/notifications')());
+app.use('/api/statistics', require('./routes/statistics')());
 
 // قائمة المستخدمين المتصلين الآن (يُستخدم عند تحميل الصفحة لأول مرة)
 app.get('/api/presence', (req, res) => {

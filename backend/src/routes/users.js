@@ -76,15 +76,18 @@ module.exports = (io) => {
         [name, username, hash, finalRole]
       );
 
+      const newUser = { id: result.insertId, name, username, role: finalRole, isRoot: false, online: false };
+
       await addLog(io, {
         userId: req.user.id,
         event: `${req.user.name} — أضاف مستخدماً جديداً: ${name} (${finalRole === 'admin' ? 'مشرف' : 'مشغل'})`,
         type: 'success'
       });
 
-      res.status(201).json({
-        id: result.insertId, name, username, role: finalRole, isRoot: false
-      });
+      // بث لحظي لباقي المشرفين المتصلين الآن (غرفة admins فقط — هذه الصفحة للمشرفين حصراً)
+      io.to('admins').emit('user:new', newUser);
+
+      res.status(201).json(newUser);
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'خطأ في الخادم' });
@@ -111,6 +114,9 @@ module.exports = (io) => {
         event: `${req.user.name} — حذف المستخدم: ${target.name} (${target.role === 'admin' ? 'مشرف' : 'مشغل'})`,
         type: 'warning'
       });
+
+      // بث لحظي لباقي المشرفين المتصلين الآن (نفس نمط user:new أعلاه)
+      io.to('admins').emit('user:deleted', { id });
 
       res.json({ ok: true });
     } catch (err) {

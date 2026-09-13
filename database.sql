@@ -32,7 +32,8 @@ CREATE TABLE `machines` (
   `label` VARCHAR(100) NOT NULL,
   `status` ENUM('RUNNING','STOPPED') NOT NULL DEFAULT 'STOPPED',
   `current_file` VARCHAR(255) DEFAULT NULL,
-  `machine_time` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'بالثواني',
+  `machine_time` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'بالثواني — مجموع الوقت المقدَّر (time_seconds) للملفات المحذوفة/المنجزة، ليس Runtime فعلي (انظر machine_runtime_logs للـRuntime الحقيقي)',
+  `running_started_at` DATETIME DEFAULT NULL COMMENT 'وقت بدء التشغيل الفعلي الحالي؛ NULL يعني الماكينة متوقفة الآن',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_code` (`code`)
@@ -55,11 +56,47 @@ CREATE TABLE `machine_files` (
   `text_comment` TEXT DEFAULT NULL COMMENT 'تعليق كتابي يضيفه المشرف',
   `voice_comment_filename` VARCHAR(255) DEFAULT NULL COMMENT 'اسم ملف التسجيل الصوتي المخزن (يضيفه المشرف)',
   `sort_order` INT NOT NULL DEFAULT 0,
+  `work_day_id` INT UNSIGNED DEFAULT NULL COMMENT 'وسم تاريخي ليوم العمل - Tag فقط، لا Snapshot ولا نسخ للصف',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_machine` (`machine_id`),
+  KEY `idx_work_day` (`work_day_id`),
   CONSTRAINT `fk_file_machine` FOREIGN KEY (`machine_id`) REFERENCES `machines` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- جدول الأسابيع — بتواريخ بداية/نهاية فعلية (وليس رقم أسبوع مجرد)
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `work_weeks`;
+CREATE TABLE `work_weeks` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `week_number` TINYINT UNSIGNED NOT NULL COMMENT 'رقم الأسبوع للعرض فقط (1..5) - التمييز الفعلي بين الأسابيع عبر start_date',
+  `start_date` DATE NOT NULL,
+  `end_date` DATE NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_week_start` (`start_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- جدول أيام العمل — سجل تاريخي لكل يوم عمل فعلي (Tag على machine_files، ليس Snapshot)
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `work_days`;
+CREATE TABLE `work_days` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `work_date` DATE NOT NULL,
+  `day_name` ENUM('sat','sun','mon','tue','wed','thu') NOT NULL,
+  `week_id` INT UNSIGNED DEFAULT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'اليوم المفتوح حاليًا للعمل - صف واحد فقط يجب أن يكون 1 (يُطبَّق في الـBackend)',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_work_date` (`work_date`),
+  KEY `idx_week` (`week_id`),
+  CONSTRAINT `fk_workday_week` FOREIGN KEY (`week_id`) REFERENCES `work_weeks` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE `machine_files`
+  ADD CONSTRAINT `fk_file_workday` FOREIGN KEY (`work_day_id`) REFERENCES `work_days` (`id`) ON DELETE SET NULL;
 
 -- ------------------------------------------------------------
 -- جدول السجل (Logs)
@@ -77,15 +114,61 @@ CREATE TABLE `logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
+-- جدول سجلات التشغيل الفعلي للماكينات (Runtime حقيقي — لإحصائيات Statistics)
+-- صف واحد لكل دورة RUNNING→STOPPED مكتملة (لا يُقسَّم الصف نفسه أبداً). قاعدة
+-- منتصف الليل الفعلية تُطبَّق عند القراءة فقط (backend/src/routes/statistics.js
+-- + utils/time.js -> splitIntervalByDay): كل دورة تُقسَّم على مستوى الثانية بين
+-- كل الأيام التقويمية التي تمر بها started_at→stopped_at فعلياً، بدل نسب المدة
+-- كاملة ليوم البداية فقط.
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `machine_runtime_logs`;
+CREATE TABLE `machine_runtime_logs` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `machine_id` INT UNSIGNED NOT NULL,
+  `started_by` INT UNSIGNED DEFAULT NULL COMMENT 'المستخدم (مشرف) الذي ضغط زر التشغيل',
+  `started_at` DATETIME NOT NULL,
+  `stopped_at` DATETIME NOT NULL,
+  `duration_seconds` INT UNSIGNED NOT NULL COMMENT 'محسوبة ومخزَّنة وقت التوقف (stopped_at - started_at)',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_machine` (`machine_id`),
+  KEY `idx_started_at` (`started_at`),
+  CONSTRAINT `fk_runtime_machine` FOREIGN KEY (`machine_id`) REFERENCES `machines` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_runtime_user` FOREIGN KEY (`started_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- جدول جلسات المشغّلين (حضور/انصراف — Login → Logout) — لإحصائيات Operator Sessions
+-- logout_at = NULL يعني أن الجلسة لم تُغلَق صراحةً عبر /api/auth/logout (مثال: إغلاق
+-- التبويب مباشرة دون تسجيل خروج) — تُستبعد هذه الجلسات من إجمالي المدة في التقارير
+-- حتى تُغلَق، ولا تُغلَق تلقائيًا أبدًا عند تسجيل دخول جديد (تفادي اختلاق وقت غير حقيقي).
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `operator_sessions`;
+CREATE TABLE `operator_sessions` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` INT UNSIGNED NOT NULL,
+  `login_at` DATETIME NOT NULL,
+  `logout_at` DATETIME DEFAULT NULL,
+  `duration_seconds` INT UNSIGNED DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_user` (`user_id`),
+  KEY `idx_login_at` (`login_at`),
+  CONSTRAINT `fk_session_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
 -- جدول الإشعارات
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `notifications`;
 CREATE TABLE `notifications` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `message` VARCHAR(255) NOT NULL,
+  `type` ENUM('machine','file','workday') NOT NULL DEFAULT 'file' COMMENT 'تصنيف حسب مصدر الحدث',
   `is_read` TINYINT(1) NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_type` (`type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;
@@ -121,5 +204,5 @@ INSERT INTO `machine_files` (`machine_id`,`name`,`status`,`time_seconds`,`sort_o
 INSERT INTO `logs` (`user_id`,`event`,`type`) VALUES
 (NULL,'بدء تشغيل النظام','info');
 
-INSERT INTO `notifications` (`message`,`is_read`) VALUES
-('النظام جاهز للعمل',0);
+INSERT INTO `notifications` (`message`,`type`,`is_read`) VALUES
+('النظام جاهز للعمل','file',0);

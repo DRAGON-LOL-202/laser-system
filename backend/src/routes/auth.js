@@ -42,6 +42,10 @@ module.exports = (io) => {
 
       await addLog(io, { userId: user.id, event: `تسجيل دخول: ${user.name}`, type: 'info' });
 
+      // فتح جلسة حضور جديدة (لإحصائيات Operator Sessions) — لا تُغلَق أي جلسة سابقة مفتوحة
+      // تلقائيًا هنا تجنّبًا لاختلاق وقت خروج غير حقيقي (انظر ملاحظة في database.sql)
+      await pool.query('INSERT INTO operator_sessions (user_id, login_at) VALUES (?, NOW())', [user.id]);
+
       res.json({ token, user: payload });
     } catch (err) {
       console.error(err);
@@ -54,9 +58,22 @@ module.exports = (io) => {
     res.json({ user: req.user });
   });
 
-  // تسجيل الخروج (تسجيل في اللوج فقط، الحذف الفعلي للتوكن من جهة العميل)
+  // تسجيل الخروج (تسجيل في اللوج + إغلاق جلسة الحضور المفتوحة لهذا المستخدم)
   router.post('/logout', authenticate, async (req, res) => {
     await addLog(io, { userId: req.user.id, event: `تسجيل خروج: ${req.user.name}`, type: 'info' });
+
+    // إغلاق آخر جلسة مفتوحة (logout_at IS NULL) لهذا المستخدم فقط، إن وُجدت
+    const [openSessions] = await pool.query(
+      'SELECT id FROM operator_sessions WHERE user_id = ? AND logout_at IS NULL ORDER BY id DESC LIMIT 1',
+      [req.user.id]
+    );
+    if (openSessions[0]) {
+      await pool.query(
+        'UPDATE operator_sessions SET logout_at = NOW(), duration_seconds = TIMESTAMPDIFF(SECOND, login_at, NOW()) WHERE id = ?',
+        [openSessions[0].id]
+      );
+    }
+
     res.json({ ok: true });
   });
 

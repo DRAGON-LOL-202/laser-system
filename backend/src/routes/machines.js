@@ -84,7 +84,24 @@ module.exports = (io) => {
       if (!machine) return res.status(404).json({ error: 'الماكينة غير موجودة' });
 
       const newStatus = machine.status === 'RUNNING' ? 'STOPPED' : 'RUNNING';
-      await pool.query('UPDATE machines SET status = ? WHERE id = ?', [newStatus, machine.id]);
+
+      if (newStatus === 'RUNNING') {
+        // بدء تشغيل جديد: نسجّل لحظة البدء فقط الآن؛ يُحسب Runtime الفعلي عند التوقف
+        await pool.query('UPDATE machines SET status = ?, running_started_at = NOW() WHERE id = ?', [newStatus, machine.id]);
+      } else {
+        // توقف: نغلق دورة التشغيل الحالية ونحسب مدتها الفعلية (Runtime حقيقي، منفصل عن machine_time المقدَّر)
+        await pool.query('UPDATE machines SET status = ?, running_started_at = NULL WHERE id = ?', [newStatus, machine.id]);
+        if (machine.running_started_at) {
+          await pool.query(
+            `INSERT INTO machine_runtime_logs (machine_id, started_by, started_at, stopped_at, duration_seconds)
+             VALUES (?, ?, ?, NOW(), TIMESTAMPDIFF(SECOND, ?, NOW()))`,
+            [machine.id, req.user.id, machine.running_started_at, machine.running_started_at]
+          );
+        }
+        // ملاحظة: إن كانت running_started_at فارغة رغم أن الحالة كانت RUNNING (بيانات قديمة قبل
+        // ترقية Statistics)، لا يمكن حساب مدة حقيقية لها — يُتجاهَل تسجيل Runtime لهذه الحالة فقط
+        // دون التأثير على تبديل الحالة نفسه.
+      }
 
       const title = machine.label;
       await addLog(io, {
@@ -92,7 +109,7 @@ module.exports = (io) => {
         event: `${req.user.name} — ${title}: ${newStatus === 'RUNNING' ? 'بدء التشغيل' : 'إيقاف التشغيل'}`,
         type: newStatus === 'RUNNING' ? 'success' : 'warning'
       });
-      await addNotification(io, title + (newStatus === 'RUNNING' ? ' - بدأ التشغيل' : ' - توقف'));
+      await addNotification(io, title + (newStatus === 'RUNNING' ? ' - بدأ التشغيل' : ' - توقف'), 'machine');
 
       const updated = await getMachineFull(code);
       broadcastMachineUpdate(updated);
@@ -129,7 +146,7 @@ module.exports = (io) => {
         event: `${req.user.name} — أضاف ملف: ${name} إلى ${machine.label}`,
         type: 'success'
       });
-      await addNotification(io, 'ملف جديد: ' + name);
+      await addNotification(io, 'ملف جديد: ' + name, 'file');
 
       const updated = await getMachineFull(code);
       broadcastMachineUpdate(updated);
@@ -182,7 +199,7 @@ module.exports = (io) => {
         event: `${req.user.name} — رفع ملف: ${req.file.originalname} إلى ${machine.label}`,
         type: 'success'
       });
-      await addNotification(io, 'ملف جديد: ' + req.file.originalname);
+      await addNotification(io, 'ملف جديد: ' + req.file.originalname, 'file');
 
       const updated = await getMachineFull(code);
       broadcastMachineUpdate(updated);
@@ -527,7 +544,7 @@ module.exports = (io) => {
         event: `${req.user.name} — نقل ملف: ${file.name} من ${sourceMachine ? sourceMachine.label : '—'} إلى ${targetMachine.label}`,
         type: 'info'
       });
-      await addNotification(io, `تم نقل ملف: ${file.name} إلى ${targetMachine.label}`);
+      await addNotification(io, `تم نقل ملف: ${file.name} إلى ${targetMachine.label}`, 'file');
 
       // نبثّ تحديث الماكينتين معاً (المصدر والهدف) لأن الحالة تغيّرت في الاثنتين
       const updatedSource = sourceMachine ? await getMachineFull(sourceMachine.code) : null;
@@ -536,6 +553,165 @@ module.exports = (io) => {
       broadcastMachineUpdate(updatedTarget);
 
       res.json({ source: updatedSource, target: updatedTarget });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'خطأ في الخادم' });
+    }
+  });
+
+  // ==================== Bulk Actions (نقل/حذف جماعي) — مشرف فقط ====================
+  // ملاحظة مهمة على الترتيب: هذان المساران (`/files/bulk-move` و`/files/bulk-delete`) يجب أن
+  // يبقيا مُعرَّفين قبل أي مسار عام بنمط `/files/:fileId` (مثل حذف/نقل ملف واحد أدناه)، لأن
+  // Express يطابق حسب ترتيب التعريف — لو جاء `/files/:fileId` أولاً لكان يلتقط "bulk-move"/
+  // "bulk-delete" كأنها قيمة fileId. لا تُعِد ترتيب الملف دون مراعاة هذه النقطة.
+
+  const MAX_BULK_IDS = 200; // حد أقصى معقول لحجم عملية جماعية واحدة
+
+  function parseIdsBody(body) {
+    const { fileIds } = body;
+    if (!Array.isArray(fileIds) || fileIds.length === 0) return null;
+    const ids = [...new Set(fileIds.map(id => parseInt(id, 10)).filter(id => Number.isFinite(id)))];
+    if (ids.length === 0 || ids.length > MAX_BULK_IDS) return null;
+    return ids;
+  }
+
+  function summarizeNames(names) {
+    const shown = names.slice(0, 5);
+    const rest = names.length - shown.length;
+    return shown.join('، ') + (rest > 0 ? ` (و${rest} أخرى)` : '');
+  }
+
+  // نقل عدة ملفات دفعة واحدة إلى ماكينة هدف — يعيد استخدام نفس منطق النقل الفردي أعلاه لكل ملف،
+  // مع بثّ واحد فقط لكل ماكينة متأثرة (وليس بثّ متكرر لكل ملف) وسجل واحد مُجمَّع
+  router.patch('/files/bulk-move', requireAdmin, async (req, res) => {
+    try {
+      const ids = parseIdsBody(req.body);
+      if (!ids) return res.status(400).json({ error: 'fileIds يجب أن تكون مصفوفة غير فارغة (وبحد أقصى ' + MAX_BULK_IDS + ')' });
+
+      const { targetMachineCode } = req.body;
+      if (!['big', 'small', 'queue'].includes(targetMachineCode)) {
+        return res.status(400).json({ error: 'كود الماكينة الهدف غير صحيح' });
+      }
+
+      const [targetRows] = await pool.query('SELECT * FROM machines WHERE code = ?', [targetMachineCode]);
+      const targetMachine = targetRows[0];
+      if (!targetMachine) return res.status(404).json({ error: 'الماكينة الهدف غير موجودة' });
+
+      const movedNames = [];
+      const skipped = [];
+      const affectedSourceMachineIds = new Set();
+
+      // نُنفَّذ تباعاً (وليس بالتوازي) للحفاظ على sort_order صحيح ومتسلسل عبر maxOrder المتغيّر مع كل إدراج
+      for (const fileId of ids) {
+        const [fileRows] = await pool.query('SELECT * FROM machine_files WHERE id = ?', [fileId]);
+        const file = fileRows[0];
+        if (!file) { skipped.push(fileId); continue; }
+        if (file.machine_id === targetMachine.id) { skipped.push(fileId); continue; }
+
+        affectedSourceMachineIds.add(file.machine_id);
+
+        const [maxOrder] = await pool.query(
+          'SELECT COALESCE(MAX(sort_order),0) AS m FROM machine_files WHERE machine_id = ?', [targetMachine.id]
+        );
+        await pool.query(
+          'UPDATE machine_files SET machine_id = ?, sort_order = ? WHERE id = ?',
+          [targetMachine.id, maxOrder[0].m + 1, fileId]
+        );
+        movedNames.push(file.name);
+      }
+
+      if (movedNames.length > 0) {
+        await addLog(io, {
+          userId: req.user.id,
+          event: `${req.user.name} — نقل ${movedNames.length} ملف جماعيًا إلى ${targetMachine.label}: ${summarizeNames(movedNames)}`,
+          type: 'info'
+        });
+        await addNotification(io, `تم نقل ${movedNames.length} ملف جماعيًا إلى ${targetMachine.label}`, 'file');
+      }
+
+      // بث تحديث كل ماكينة مصدر متأثرة + الماكينة الهدف (مرة واحدة لكل ماكينة، بغض النظر عن عدد الملفات)
+      for (const machineId of affectedSourceMachineIds) {
+        const [mRows] = await pool.query('SELECT code FROM machines WHERE id = ?', [machineId]);
+        if (mRows[0]) broadcastMachineUpdate(await getMachineFull(mRows[0].code));
+      }
+      broadcastMachineUpdate(await getMachineFull(targetMachine.code));
+
+      res.json({ movedCount: movedNames.length, skippedIds: skipped });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'خطأ في الخادم' });
+    }
+  });
+
+  // حذف عدة ملفات دفعة واحدة — نفس منطق الحذف الفردي أعلاه (تخزين + صورة معاينة + تعليق صوتي)
+  // لكل ملف، مع إعادة وقتها لماكينتها الخاصة (بالمجموع لكل ماكينة)، وبثّ واحد فقط لكل ماكينة متأثرة
+  router.delete('/files/bulk-delete', requireAdmin, async (req, res) => {
+    try {
+      const ids = parseIdsBody(req.body);
+      if (!ids) return res.status(400).json({ error: 'fileIds يجب أن تكون مصفوفة غير فارغة (وبحد أقصى ' + MAX_BULK_IDS + ')' });
+
+      const deletedNames = [];
+      const skipped = [];
+      const affectedMachineIds = new Set();
+
+      for (const fileId of ids) {
+        const [rows] = await pool.query('SELECT * FROM machine_files WHERE id = ?', [fileId]);
+        const file = rows[0];
+        if (!file) { skipped.push(fileId); continue; }
+
+        if (file.stored_filename) {
+          if (R2_ENABLED) {
+            try { await deleteFromR2(file.stored_filename); } catch (e) { console.error('فشل حذف الملف من R2:', e.message); }
+          } else {
+            const filePath = path.join(UPLOAD_DIR, file.stored_filename);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          }
+        }
+        if (file.thumbnail_filename) {
+          if (R2_ENABLED) {
+            try { await deleteFromR2(file.thumbnail_filename); } catch (e) { console.error('فشل حذف صورة المعاينة من R2:', e.message); }
+          } else {
+            const thumbPath = path.join(UPLOAD_DIR, file.thumbnail_filename);
+            if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
+          }
+        }
+        if (file.voice_comment_filename) {
+          if (R2_ENABLED) {
+            try { await deleteFromR2(file.voice_comment_filename); } catch (e) { console.error('فشل حذف التسجيل الصوتي من R2:', e.message); }
+          } else {
+            const voicePath = path.join(UPLOAD_DIR, file.voice_comment_filename);
+            if (fs.existsSync(voicePath)) fs.unlinkSync(voicePath);
+          }
+        }
+
+        await pool.query(
+          'UPDATE machines SET machine_time = machine_time + ? WHERE id = ?',
+          [file.time_seconds, file.machine_id]
+        );
+        await pool.query('DELETE FROM machine_files WHERE id = ?', [fileId]);
+
+        affectedMachineIds.add(file.machine_id);
+        deletedNames.push(file.name);
+      }
+
+      if (deletedNames.length > 0) {
+        const { machineLabel } = req.body;
+        await addLog(io, {
+          userId: req.user.id,
+          event: `${req.user.name} — حذف ${deletedNames.length} ملف جماعيًا من ${machineLabel || ''}: ${summarizeNames(deletedNames)}`,
+          type: 'warning'
+        });
+        // ملاحظة: أُضيف هذا السطر ضمن جلسة "Notifications" — تصحيح لتناسق ناقص كان موجوداً
+        // سابقاً (bulk-move كان يُصدر إشعاراً، بينما bulk-delete لم يكن يُصدر أي إشعار رغم تماثل الأهمية)
+        await addNotification(io, `تم حذف ${deletedNames.length} ملف جماعيًا من ${machineLabel || ''}`, 'file');
+      }
+
+      for (const machineId of affectedMachineIds) {
+        const [mRows] = await pool.query('SELECT code FROM machines WHERE id = ?', [machineId]);
+        if (mRows[0]) broadcastMachineUpdate(await getMachineFull(mRows[0].code));
+      }
+
+      res.json({ deletedCount: deletedNames.length, skippedIds: skipped });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'خطأ في الخادم' });

@@ -15,10 +15,11 @@ async function addLog(io, { userId = null, event, type = 'info' }) {
 }
 
 // إضافة إشعار جديد + بثه لحظياً
-async function addNotification(io, message) {
+// type: تصنيف حسب مصدر الحدث — 'machine' | 'file' | 'workday' (يطابق ENUM notifications.type)
+async function addNotification(io, message, type = 'file') {
   const [result] = await pool.query(
-    'INSERT INTO notifications (message) VALUES (?)',
-    [message]
+    'INSERT INTO notifications (message, type) VALUES (?, ?)',
+    [message, type]
   );
   const [rows] = await pool.query('SELECT * FROM notifications WHERE id = ?', [result.insertId]);
   const notif = rows[0];
