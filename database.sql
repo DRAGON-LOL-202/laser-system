@@ -49,6 +49,7 @@ CREATE TABLE `machine_files` (
   `name` VARCHAR(255) NOT NULL,
   `status` ENUM('WAITING','WORKING','CUTTING','DELIVERED') NOT NULL DEFAULT 'WAITING',
   `time_seconds` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'الوقت المقدر للملف بالثواني',
+  `time_recorded_at` DATETIME NULL COMMENT 'يُحدَّث تلقائيًا كلما أُدخل/عُدِّل وقت الملف (time_seconds) — لتجميع Statistics فقط، لا علاقة له بطريقة الإدخال اليدوي',
   `stored_filename` VARCHAR(255) DEFAULT NULL COMMENT 'اسم الملف الفعلي المخزن على السيرفر',
   `original_filename` VARCHAR(255) DEFAULT NULL,
   `file_size` INT UNSIGNED DEFAULT NULL COMMENT 'بالبايت',
@@ -169,6 +170,25 @@ CREATE TABLE `notifications` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_type` (`type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- جدول أرشيف "وقت الملف" — يحفظ مساهمة كل ملف محذوف (فردي/جماعي/Cleanup)
+-- في وقت الماكينة، حتى لا تفقد صفحة Statistics بياناتها التاريخية بعد حذف
+-- صف machine_files. هذا هو مصدر الإحصائيات الآن (مع machine_files الحيّة)،
+-- وليس machine_runtime_logs.
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `file_time_archive`;
+CREATE TABLE `file_time_archive` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `machine_id` INT UNSIGNED NOT NULL,
+  `seconds` INT UNSIGNED NOT NULL COMMENT 'قيمة time_seconds وقت حذف الملف',
+  `recorded_at` DATETIME NOT NULL COMMENT 'time_recorded_at الأصلي للملف (أو created_at لو لم يُدخَل وقت صراحةً قبل الحذف)',
+  `archived_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_machine` (`machine_id`),
+  KEY `idx_recorded_at` (`recorded_at`),
+  CONSTRAINT `fk_archive_machine` FOREIGN KEY (`machine_id`) REFERENCES `machines` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

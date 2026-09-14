@@ -103,20 +103,21 @@ const Api = {
   addUser(payload){ return this.request("/api/users",{method:"POST",body:payload}); },
   deleteUser(id){ return this.request("/api/users/"+id,{method:"DELETE"}); },
 
-  getMachines(){ return this.request("/api/machines"); },
-  toggleMachine(code){ return this.request("/api/machines/"+code+"/toggle",{method:"PATCH"}); },
-  addFileByName(code,name,time){ return this.request("/api/machines/"+code+"/files",{method:"POST",body:{name,time}}); },
-  uploadFile(code,file,time){
+  getMachines(workDayId){ return this.request("/api/machines"+(workDayId?("?workDayId="+workDayId):"")); },
+  toggleMachine(code,workDayId){ return this.request("/api/machines/"+code+"/toggle"+(workDayId?("?workDayId="+workDayId):""),{method:"PATCH"}); },
+  addFileByName(code,name,time,workDayId){ return this.request("/api/machines/"+code+"/files",{method:"POST",body:{name,time,workDayId}}); },
+  uploadFile(code,file,time,workDayId){
     const fd = new FormData();
     fd.append("file",file);
     fd.append("time",time);
+    fd.append("workDayId",workDayId);
     return this.request("/api/machines/"+code+"/files/upload",{method:"POST",body:fd,isForm:true});
   },
   renameFile(fileId,name,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/name",{method:"PATCH",body:{name,machineCode,machineLabel}}); },
   setFileTime(fileId,time,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/time",{method:"PATCH",body:{time,machineCode,machineLabel}}); },
   setFileStatus(fileId,status,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId+"/status",{method:"PATCH",body:{status,machineCode,machineLabel}}); },
   deleteFile(fileId,machineCode,machineLabel){ return this.request("/api/machines/files/"+fileId,{method:"DELETE",body:{machineCode,machineLabel}}); },
-  reorderFiles(code,orderedIds){ return this.request("/api/machines/"+code+"/files/reorder",{method:"PATCH",body:{orderedIds}}); },
+  reorderFiles(code,orderedIds,workDayId){ return this.request("/api/machines/"+code+"/files/reorder",{method:"PATCH",body:{orderedIds,workDayId}}); },
   downloadFileUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/download"; },
   uploadThumbnail(fileId,file,machineCode,machineLabel){
     const fd=new FormData();
@@ -142,7 +143,9 @@ const Api = {
   voiceCommentUrl(fileId){ return API_BASE+"/api/machines/files/"+fileId+"/voice?token="+encodeURIComponent(this.token||""); },
 
   moveFile(fileId,targetMachineCode){ return this.request("/api/machines/files/"+fileId+"/move",{method:"PATCH",body:{targetMachineCode}}); },
-  bulkMoveFiles(fileIds,targetMachineCode){ return this.request("/api/machines/files/bulk-move",{method:"PATCH",body:{fileIds,targetMachineCode}}); },
+  bulkMoveFiles(fileIds,targetMachineCode,workDayId){ return this.request("/api/machines/files/bulk-move",{method:"PATCH",body:{fileIds,targetMachineCode,workDayId}}); },
+  transferWaiting(workDayId){ return this.request("/api/machines/files/transfer-waiting",{method:"POST",body:{workDayId}}); },
+  cleanupFiles(workDayIds,currentWorkDayId){ return this.request("/api/machines/files/cleanup",{method:"DELETE",body:{workDayIds,currentWorkDayId}}); },
   bulkDeleteFiles(fileIds,machineLabel){ return this.request("/api/machines/files/bulk-delete",{method:"DELETE",body:{fileIds,machineLabel}}); },
 
   getLogs(){ return this.request("/api/logs"); },
@@ -156,28 +159,26 @@ const Api = {
     const q=qs.toString();
     return this.request("/api/notifications/all"+(q?"?"+q:""));
   },
-  getMachineStats({scope,weekId,year,month}){
+  getMachineStats({scope,weekStart,year,month,machineCode}){
     const qs=new URLSearchParams({scope});
-    if(weekId) qs.set("weekId",weekId);
+    if(weekStart) qs.set("weekStart",weekStart);
     if(year) qs.set("year",year);
     if(month) qs.set("month",month);
+    if(machineCode) qs.set("machineCode",machineCode);
     return this.request("/api/statistics/machines?"+qs.toString());
   },
-  getOperatorStats({scope,weekId,year,month}){
+  getOperatorStats({scope,weekStart,year,month,userId}){
     const qs=new URLSearchParams({scope});
-    if(weekId) qs.set("weekId",weekId);
+    if(weekStart) qs.set("weekStart",weekStart);
     if(year) qs.set("year",year);
     if(month) qs.set("month",month);
+    if(userId) qs.set("userId",userId);
     return this.request("/api/statistics/operators?"+qs.toString());
   },
 
-  getWorkDays(){ return this.request("/api/work/days"); },
-  getActiveWorkDay(){ return this.request("/api/work/days/active"); },
-  startWorkDay(date){ return this.request("/api/work/days",{method:"POST",body:{date}}); },
-  closeWorkDay(id){ return this.request("/api/work/days/"+id+"/close",{method:"PATCH"}); },
+  // شبكة استقلال الأيام: 4 أسابيع ثابتة × 7 أيام (الجمعة→الخميس)، كل خانة لها id دائم
+  getWorkGrid(){ return this.request("/api/work/grid"); },
   getWorkWeeks(){ return this.request("/api/work/weeks"); },
-  getWorkWeek(id){ return this.request("/api/work/weeks/"+id); },
-  createWorkWeek(payload){ return this.request("/api/work/weeks",{method:"POST",body:payload}); },
 };
 
 function t2s(t){if(!t)return 0;const[h,m,s]=t.split(":").map(Number);return(h||0)*3600+(m||0)*60+(s||0);}
@@ -817,7 +818,7 @@ const NOTIF_TYPE_CONFIG={
 let globalPasteTargetOwner=null;
 
 /* ---- ADMIN TABLE ---- */
-function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
+function AdminTable({machine,title,onChanged,addToast,onOpenImage,workDayId}){
   const[showAdd,ssa]=useState(false);
   const[fname,sfn]=useState("");const[ftime,sft]=useState("00:00:00");
   const[dragIdx,sdi]=useState(null);
@@ -846,13 +847,8 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     finally{ sBusy(false); }
   };
 
-  const toggle=()=>wrap(async()=>{
-    await Api.toggleMachine(machine.code);
-    await onChanged();
-  });
-
   const addByName=(name)=>wrap(async()=>{
-    await Api.addFileByName(machine.code,name,ftime);
+    await Api.addFileByName(machine.code,name,ftime,workDayId);
     await onChanged();
     sfn("");ssa(false);
   });
@@ -863,7 +859,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     sUploading(true);
     try{
       for(const f of files){
-        await Api.uploadFile(machine.code,f,"00:00:00");
+        await Api.uploadFile(machine.code,f,"00:00:00",workDayId);
       }
       await onChanged();
       ssa(false);
@@ -919,7 +915,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
   const bulkMove=(targetMachineCode)=>wrap(async()=>{
     const n=selectedFileIds.length;
     if(n===0||!targetMachineCode) return;
-    const result=await Api.bulkMoveFiles(selectedFileIds,targetMachineCode);
+    const result=await Api.bulkMoveFiles(selectedFileIds,targetMachineCode,workDayId);
     clearSelection();
     await onChanged();
     if(result && result.skippedIds && result.skippedIds.length>0){
@@ -1031,7 +1027,7 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
     if(dragIdx===null) return;
     const orderedIds = localFiles.map(f=>f.id);
     sdi(null);
-    await Api.reorderFiles(machine.code,orderedIds);
+    await Api.reorderFiles(machine.code,orderedIds,workDayId);
     await onChanged();
   });
 
@@ -1147,12 +1143,12 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:6,flexWrap:"wrap"}}>
           <span style={{fontWeight:700,color:"#e06a24",fontSize:13}}>{title}</span>
           <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            {machine.code!=="queue"&&(
-              <button onClick={toggle} disabled={busy}
-                style={{display:"inline-flex",alignItems:"center",gap:4,background:run?"#3f1515":"#0f4c2a",color:run?"#fca5a5":"#4ade80",border:"1px solid "+(run?"#ef4444":"#22c55e"),borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>
-                <I n={run?"pause":"play"} s={11}/>{run?"إيقاف":"تشغيل"}
-              </button>
-            )}
+            {/* 🆕 زر "تسجيل بدء/توقف التشغيل" أُزيل نهائيًا هنا (HANDOFF §5 — Machine ON/OFF
+                control غير مطلوب، الموقع لا يتحكم فعليًا بأي ماكينة). كان مؤجَّلاً سابقًا فقط
+                لأنه كان المصدر الوحيد لإحصائيات وقت التشغيل؛ بعد فصل Statistics عن
+                machine_runtime_logs لتعتمد على File Time (انظر Change Log §29)، لم يعد هناك
+                أي تعارض يمنع إزالته. الحالة (قيد التشغيل/متوقفة) تبقى ظاهرة كمعلومة فقط أدناه،
+                مجمَّدة على آخر قيمة لها قبل الإزالة. لا علاقة لهذا بـFile Status (يبقى كما هو تمامًا). */}
             <button onClick={()=>ssa(p=>!p)}
               style={{display:"inline-flex",alignItems:"center",gap:4,background:"#1e3a5f",color:"#60a5fa",border:"1px solid #1e40af",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,whiteSpace:"nowrap"}}>
               <I n="plus" s={11}/> إضافة
@@ -1338,7 +1334,25 @@ function AdminTable({machine,title,onChanged,addToast,onOpenImage}){
 }
 
 /* ---- ADMIN DASH ---- */
-function AdminDash({big,small,queue,onChanged,addToast,onOpenImage}){
+function AdminDash({big,small,queue,onChanged,addToast,onOpenImage,workDayId}){
+  const[transferring,setTransferring]=useState(false);
+
+  async function handleTransferWaiting(){
+    if(!workDayId){ addToast("اختر يومًا أولاً","error"); return; }
+    if(!window.confirm("سيتم نقل كل الملفات بحالة «انتظار» من اليوم الحالي (الماكينتين وقائمة الانتظار) إلى اليوم التالي. متابعة؟")) return;
+    setTransferring(true);
+    try{
+      const result=await Api.transferWaiting(workDayId);
+      if(result.totalMoved>0) addToast(`تم نقل ${result.totalMoved} ملف/ملفات إلى اليوم التالي`,'success');
+      else addToast("لا توجد ملفات بحالة انتظار لنقلها",'info');
+      onChanged();
+    }catch(e){
+      addToast(e.message||"فشل نقل الانتظار",'error');
+    }finally{
+      setTransferring(false);
+    }
+  }
+
   return(
     <div>
       <h2 style={{color:"#e2e8f0",fontSize:18,fontWeight:700,marginBottom:14,marginTop:0}}>لوحة تحكم المشرف</h2>
@@ -1347,17 +1361,22 @@ function AdminDash({big,small,queue,onChanged,addToast,onOpenImage}){
         <MCard m={small} label="ماكينة صغيرة - CNC CO2"/>
       </div>
       <div className="mobile-stack" style={{display:"flex",gap:12,marginBottom:14}}>
-        <AdminTable machine={big} title="الماكينة الكبيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
-        <AdminTable machine={small} title="الماكينة الصغيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
+        <AdminTable machine={big} title="الماكينة الكبيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage} workDayId={workDayId}/>
+        <AdminTable machine={small} title="الماكينة الصغيرة" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage} workDayId={workDayId}/>
       </div>
       {queue&&(
         <div style={{marginTop:4}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
             <I n="inbox" s={16}/>
             <span style={{color:"#e06a24",fontWeight:700,fontSize:14}}>قائمة الانتظار</span>
             <span style={{color:"#475569",fontSize:11}}>— مكان مؤقت لرفع الملفات قبل توزيعها؛ اسحب أي ملف من هنا إلى إحدى الماكينتين (غير ظاهرة للمشغّل)</span>
+            <button onClick={handleTransferWaiting} disabled={transferring}
+              style={{marginRight:"auto",display:"flex",alignItems:"center",gap:6,background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:transferring?"default":"pointer",opacity:transferring?0.6:1}}>
+              {transferring?<Spinner s={12}/>:<I n="rep" s={13}/>}
+              نقل الانتظار لليوم التالي
+            </button>
           </div>
-          <AdminTable machine={queue} title="قائمة الانتظار" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage}/>
+          <AdminTable machine={queue} title="قائمة الانتظار" onChanged={onChanged} addToast={addToast} onOpenImage={onOpenImage} workDayId={workDayId}/>
         </div>
       )}
     </div>
@@ -1677,42 +1696,93 @@ function secondsToClock(s){
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60);
   return h+"س "+String(m).padStart(2,"0")+"د";
 }
+function StatKpiCard({label,value}){
+  return(
+    <div style={{flex:"1 1 160px",background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:"12px 14px"}}>
+      <div style={{color:"#94a3b8",fontSize:11,marginBottom:6}}>{label}</div>
+      <div style={{color:"#e2e8f0",fontSize:18,fontWeight:700}}>{value}</div>
+    </div>
+  );
+}
 
-function StatisticsPage({addToast}){
+// أقرب جمعة <= اليوم الحالي، بصيغة "YYYY-MM-DD" (نفس منطق الخادم resolveWeekStart)
+function currentWeekStart(){
+  const base=new Date();
+  const day=base.getDay(); // 0=Sun..6=Sat, الجمعة=5
+  const diff=(day-5+7)%7;
+  const d=new Date(base.getFullYear(),base.getMonth(),base.getDate()-diff);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function shiftDateStr(dateStr,days){
+  const[y,m,d]=dateStr.split("-").map(Number);
+  const dt=new Date(y,m-1,d+days);
+  return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
+}
+function ddmmyyyy(dateStr){
+  const[y,m,d]=dateStr.split("-");
+  return `${d}-${m}-${y}`;
+}
+
+function StatisticsPage({addToast,socket}){
   const[scope,setScope]=useState("week");
-  const[weeks,setWeeks]=useState([]);
-  const[weekId,setWeekId]=useState(null);
+  const[weekStart,setWeekStart]=useState(currentWeekStart);
   const now=new Date();
   const[year,setYear]=useState(now.getFullYear());
   const[month,setMonth]=useState(now.getMonth()+1);
+  const[machineCode,setMachineCode]=useState("");
+  const[userId,setUserId]=useState("");
+  const[operators,setOperators]=useState([]);
   const[mStats,setMStats]=useState(null);
   const[oStats,setOStats]=useState(null);
   const[loading,setLoading]=useState(false);
 
   useEffect(()=>{
-    Api.getWorkWeeks().then(ws=>{
-      setWeeks(ws||[]);
-      if(ws && ws.length>0) setWeekId(ws[0].id); // الأحدث افتراضياً (مرتّبة DESC من الخادم)
-    }).catch(()=>{});
+    // المشغّلون الحقيقيون من Users (HANDOFF §11) — وليس أسماء ثابتة بالكود
+    Api.getUsers().then(us=>setOperators((us||[]).filter(u=>u.role==="operator"))).catch(()=>{});
   },[]);
 
   const load=useCallback(async()=>{
-    if(scope==="week" && !weekId) return;
     setLoading(true);
     try{
-      const params=scope==="week"?{scope,weekId}:{scope,year,month};
-      const [ms,os]=await Promise.all([Api.getMachineStats(params),Api.getOperatorStats(params)]);
+      const base=scope==="week"?{scope,weekStart}:{scope,year,month};
+      const [ms,os]=await Promise.all([
+        Api.getMachineStats({...base,machineCode:machineCode||undefined}),
+        Api.getOperatorStats({...base,userId:userId||undefined})
+      ]);
       setMStats(ms); setOStats(os);
     }catch(e){
       addToast(e.message||"فشل تحميل الإحصائيات",'error');
     }finally{
       setLoading(false);
     }
-  },[scope,weekId,year,month,addToast]);
+  },[scope,weekStart,year,month,machineCode,userId,addToast]);
 
   useEffect(()=>{ load(); },[load]);
 
+  // 🆕 HANDOFF §13: Auto-Update عبر Socket.io الحالي (بدون إعادة بناء Socket.io — نفس الاتصال المُمرَّر من App).
+  // "machine:update" يُبَث أصلاً عند أي تغيير في ملفات الماكينات (بما فيها إدخال/تعديل File Time عبر
+  // PATCH /files/:fileId/time، الذي يغذي الإحصائيات مباشرة) وعند الحذف الفردي/الجماعي/Cleanup.
+  // نعيد تحميل الإحصائيات تلقائياً عند وصول أي حدث كهذا وصفحة الإحصائيات مفتوحة، مع Debounce بسيط
+  // لتفادي تكرار الطلب عند وصول عدة أحداث متتالية سريعة (مثلاً Cleanup لعدة ملفات دفعة واحدة).
+  useEffect(()=>{
+    if(!socket) return;
+    let debounceTimer=null;
+    const scheduleReload=()=>{
+      if(debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer=setTimeout(()=>{ load(); },800);
+    };
+    socket.on("machine:update",scheduleReload);
+    return ()=>{
+      if(debounceTimer) clearTimeout(debounceTimer);
+      socket.off("machine:update",scheduleReload);
+    };
+  },[socket,load]);
+
   const maxDaily=mStats?Math.max(1,...mStats.daily.map(d=>Math.max(d.big||0,d.small||0))):1;
+  const bestMachine=mStats?mStats.machines.slice().sort((a,b)=>b.totalSeconds-a.totalSeconds)[0]:null;
+  const totalRuntimeSeconds=mStats?mStats.machines.reduce((s,m)=>s+m.totalSeconds,0):0;
+  const dailyAvgSeconds=(mStats&&mStats.daily.length>0)?Math.round(totalRuntimeSeconds/mStats.daily.length):0;
+  const totalOperatorSessions=oStats?oStats.operators.reduce((s,o)=>s+o.closedSessions+o.openSessions,0):0;
 
   return(
     <div>
@@ -1728,11 +1798,19 @@ function StatisticsPage({addToast}){
           ))}
         </div>
         {scope==="week"?(
-          <select value={weekId||""} onChange={e=>setWeekId(Number(e.target.value))}
-            style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"6px 10px",fontSize:12}}>
-            {weeks.map(w=>(<option key={w.id} value={w.id}>الأسبوع {w.week_number} ({fmtDateStr(w.start_date)} — {fmtDateStr(w.end_date)})</option>))}
-            {weeks.length===0&&<option value="">لا توجد أسابيع بعد</option>}
-          </select>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <button onClick={()=>setWeekStart(s=>shiftDateStr(s,-7))} title="الأسبوع السابق"
+              style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12}}>◀</button>
+            <div style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"6px 10px",fontSize:12,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+              {ddmmyyyy(shiftDateStr(weekStart,6))} → {ddmmyyyy(weekStart)}
+            </div>
+            <button onClick={()=>setWeekStart(s=>shiftDateStr(s,7))} title="الأسبوع التالي"
+              style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12}}>▶</button>
+            {weekStart!==currentWeekStart()&&(
+              <button onClick={()=>setWeekStart(currentWeekStart())}
+                style={{background:"#0d1224",color:"#94a3b8",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:11}}>الأسبوع الحالي</button>
+            )}
+          </div>
         ):(
           <div style={{display:"flex",gap:6}}>
             <select value={month} onChange={e=>setMonth(Number(e.target.value))}
@@ -1745,7 +1823,27 @@ function StatisticsPage({addToast}){
             </select>
           </div>
         )}
+        <select value={machineCode} onChange={e=>setMachineCode(e.target.value)}
+          style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"6px 10px",fontSize:12}}>
+          <option value="">جميع الماكينات</option>
+          {mStats&&mStats.machines.map(m=>(<option key={m.code} value={m.code}>{m.label}</option>))}
+          {!mStats&&(<><option value="big">الماكينة الكبيرة</option><option value="small">الماكينة الصغيرة</option></>)}
+        </select>
+        <select value={userId} onChange={e=>setUserId(e.target.value)}
+          style={{background:"#0d1224",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"6px 10px",fontSize:12}}>
+          <option value="">المشغلين</option>
+          {operators.map(o=>(<option key={o.id} value={o.id}>{o.name}</option>))}
+        </select>
       </div>
+
+      {!loading&&mStats&&oStats&&(
+        <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+          <StatKpiCard label="إجمالي جلسات المشغلين" value={totalOperatorSessions+" جلسة"}/>
+          <StatKpiCard label="متوسط التشغيل اليومي" value={secondsToClock(dailyAvgSeconds)}/>
+          <StatKpiCard label="إجمالي تشغيل الماكينات" value={secondsToClock(totalRuntimeSeconds)}/>
+          <StatKpiCard label="أفضل ماكينة" value={bestMachine&&bestMachine.totalSeconds>0?bestMachine.label:"—"}/>
+        </div>
+      )}
 
       {loading&&<div style={{padding:24,textAlign:"center",color:"#475569",fontSize:13}}>جاري التحميل...</div>}
 
@@ -1806,218 +1904,14 @@ function StatisticsPage({addToast}){
   );
 }
 
-const DAY_NAME_AR = {sat:"السبت",sun:"الأحد",mon:"الاثنين",tue:"الثلاثاء",wed:"الأربعاء",thu:"الخميس"};
+/* ترتيب الأيام الثابت: الجمعة → الخميس (يطابق الباك إند تمامًا) */
+const DAY_ORDER = ["fri","sat","sun","mon","tue","wed","thu"];
+const DAY_NAME_AR = {fri:"الجمعة",sat:"السبت",sun:"الأحد",mon:"الاثنين",tue:"الثلاثاء",wed:"الأربعاء",thu:"الخميس"};
+const WEEK_LABEL_AR = {1:"الأسبوع الأول",2:"الأسبوع الثاني",3:"الأسبوع الثالث",4:"الأسبوع الرابع"};
 
 function fmtDateStr(d){
   if(!d) return "";
   try{ return String(d).slice(0,10); }catch(e){ return d||""; }
-}
-
-/* ---- WORK DAYS PAGE ---- */
-function WorkDaysPage({workDays,workWeeks,activeDay,isAdmin,onChanged,addToast}){
-  const[newDate,setNewDate]=useState(()=>new Date().toISOString().slice(0,10));
-  const[startBusy,setStartBusy]=useState(false);
-  const[closeBusyId,setCloseBusyId]=useState(null);
-
-  const[showWeekForm,setShowWeekForm]=useState(false);
-  const[weekForm,setWeekForm]=useState({weekNumber:"",startDate:"",endDate:""});
-  const[weekErr,setWeekErr]=useState("");
-  const[weekBusy,setWeekBusy]=useState(false);
-
-  const startDay=async()=>{
-    setStartBusy(true);
-    try{
-      await Api.startWorkDay(newDate);
-      addToast("تم بدء يوم العمل بنجاح",'success');
-      await onChanged();
-    }catch(e){
-      addToast(e.message||"فشل بدء يوم العمل",'error');
-    }finally{
-      setStartBusy(false);
-    }
-  };
-
-  const closeDay=async(day)=>{
-    if(!confirm(`هل تريد إغلاق يوم العمل ${fmtDateStr(day.work_date)}؟`)) return;
-    setCloseBusyId(day.id);
-    try{
-      await Api.closeWorkDay(day.id);
-      await onChanged();
-    }catch(e){
-      addToast(e.message||"فشل إغلاق اليوم",'error');
-    }finally{
-      setCloseBusyId(null);
-    }
-  };
-
-  const createWeek=async()=>{
-    setWeekErr("");
-    const {weekNumber,startDate,endDate}=weekForm;
-    if(!weekNumber||!startDate||!endDate){setWeekErr("يرجى ملء جميع الحقول");return;}
-    setWeekBusy(true);
-    try{
-      await Api.createWorkWeek({weekNumber:Number(weekNumber),startDate,endDate});
-      setWeekForm({weekNumber:"",startDate:"",endDate:""});
-      setShowWeekForm(false);
-      await onChanged();
-    }catch(e){
-      setWeekErr(e.message||"فشلت العملية");
-    }finally{
-      setWeekBusy(false);
-    }
-  };
-
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <h2 style={{color:"#e2e8f0",fontSize:18,fontWeight:700,margin:0}}>أيام وأسابيع العمل</h2>
-      </div>
-
-      {/* اليوم النشط حالياً */}
-      <div style={{background:activeDay?"#0f4c2a":"#0d1224",border:"1px solid "+(activeDay?"#22c55e":"#1e2d4a"),borderRadius:12,padding:16,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{background:activeDay?"#0a2e18":"#0a0e1a",color:activeDay?"#4ade80":"#64748b",borderRadius:8,padding:8}}>
-            <I n="cal" s={20}/>
-          </div>
-          <div>
-            <div style={{fontSize:12,color:"#94a3b8"}}>اليوم النشط الآن</div>
-            {activeDay?(
-              <div style={{color:"#4ade80",fontWeight:700,fontSize:15}}>{DAY_NAME_AR[activeDay.day_name]||activeDay.day_name} — {fmtDateStr(activeDay.work_date)}</div>
-            ):(
-              <div style={{color:"#64748b",fontWeight:600,fontSize:14}}>لا يوجد يوم عمل نشط حالياً</div>
-            )}
-          </div>
-        </div>
-        {isAdmin&&(
-          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-            <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
-              style={{background:"#0a0e1a",border:"1px solid #1e2d4a",borderRadius:6,padding:"7px 9px",color:"#e2e8f0",fontSize:12,outline:"none"}}/>
-            <button onClick={startDay} disabled={startBusy}
-              style={{display:"inline-flex",alignItems:"center",gap:5,background:"#e06a24",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,fontWeight:600}}>
-              {startBusy&&<Spinner s={12} color="#fff"/>}<I n="plus" s={13}/> بدء يوم جديد
-            </button>
-            {activeDay&&(
-              <button onClick={()=>closeDay(activeDay)} disabled={closeBusyId===activeDay.id}
-                style={{background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:8,padding:"8px 14px",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",gap:5}}>
-                {closeBusyId===activeDay.id&&<Spinner s={12} color="#fca5a5"/>}إغلاق اليوم
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* قائمة أيام العمل */}
-      <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,overflow:"hidden",marginBottom:16}}>
-        <div style={{padding:"11px 14px",borderBottom:"1px solid #1e2d4a",background:"#0f1830",display:"flex",justifyContent:"space-between"}}>
-          <span style={{color:"#e06a24",fontWeight:600,fontSize:13}}>سجل أيام العمل</span>
-          <span style={{color:"#64748b",fontSize:11}}>{workDays.length} يوم</span>
-        </div>
-        <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:420}}>
-            <thead><tr style={{background:"#0a0e1a",borderBottom:"1px solid #1e2d4a"}}>
-              {["التاريخ","اليوم","الأسبوع","الحالة",isAdmin?"إجراء":null].filter(Boolean).map(h=>(
-                <th key={h} style={{padding:"9px 12px",textAlign:"center",color:"#64748b"}}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {workDays.length===0&&(
-                <tr><td colSpan={isAdmin?5:4} style={{padding:20,textAlign:"center",color:"#475569"}}>لا توجد أيام عمل مسجلة بعد</td></tr>
-              )}
-              {workDays.map(d=>(
-                <tr key={d.id} className="trh" style={{borderBottom:"1px solid #1a2744"}}>
-                  <td style={{padding:"9px 12px",color:"#e2e8f0",textAlign:"center",fontFamily:"monospace"}}>{fmtDateStr(d.work_date)}</td>
-                  <td style={{padding:"9px 12px",color:"#94a3b8",textAlign:"center"}}>{DAY_NAME_AR[d.day_name]||d.day_name}</td>
-                  <td style={{padding:"9px 12px",color:"#94a3b8",textAlign:"center"}}>{d.week_number?("أسبوع "+d.week_number):"—"}</td>
-                  <td style={{padding:"9px 12px",textAlign:"center"}}>
-                    {d.is_active?(
-                      <span style={{background:"#0f4c2a",color:"#4ade80",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>نشط</span>
-                    ):(
-                      <span style={{background:"#1e2d4a",color:"#64748b",borderRadius:6,padding:"2px 8px",fontSize:11}}>مغلق</span>
-                    )}
-                  </td>
-                  {isAdmin&&(
-                    <td style={{padding:"9px 12px",textAlign:"center"}}>
-                      {d.is_active?(
-                        <button onClick={()=>closeDay(d)} disabled={closeBusyId===d.id}
-                          style={{background:"#3f1515",color:"#fca5a5",border:"none",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11}}>
-                          {closeBusyId===d.id?<Spinner s={11} color="#fca5a5"/>:"إغلاق"}
-                        </button>
-                      ):<span style={{color:"#475569",fontSize:11}}>—</span>}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* الأسابيع */}
-      <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,overflow:"hidden"}}>
-        <div style={{padding:"11px 14px",borderBottom:"1px solid #1e2d4a",background:"#0f1830",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-          <span style={{color:"#e06a24",fontWeight:600,fontSize:13}}>أسابيع العمل</span>
-          {isAdmin&&(
-            <button onClick={()=>setShowWeekForm(p=>!p)}
-              style={{display:"inline-flex",alignItems:"center",gap:5,background:"#e06a24",color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:600}}>
-              <I n="plus" s={11}/> أسبوع جديد
-            </button>
-          )}
-        </div>
-
-        {showWeekForm&&isAdmin&&(
-          <div style={{padding:14,borderBottom:"1px solid #1e2d4a"}}>
-            {weekErr&&<div style={{background:"#3f1515",border:"1px solid #ef4444",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#fca5a5"}}>{weekErr}</div>}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:10}}>
-              <div>
-                <label style={{display:"block",fontSize:11,color:"#94a3b8",marginBottom:4}}>رقم الأسبوع</label>
-                <input type="number" value={weekForm.weekNumber} onChange={e=>setWeekForm(p=>({...p,weekNumber:e.target.value}))}
-                  style={{width:"100%",background:"#0a0e1a",border:"1px solid #1e2d4a",borderRadius:6,padding:"8px 9px",color:"#e2e8f0",fontSize:12,outline:"none"}}/>
-              </div>
-              <div>
-                <label style={{display:"block",fontSize:11,color:"#94a3b8",marginBottom:4}}>تاريخ البداية</label>
-                <input type="date" value={weekForm.startDate} onChange={e=>setWeekForm(p=>({...p,startDate:e.target.value}))}
-                  style={{width:"100%",background:"#0a0e1a",border:"1px solid #1e2d4a",borderRadius:6,padding:"8px 9px",color:"#e2e8f0",fontSize:12,outline:"none"}}/>
-              </div>
-              <div>
-                <label style={{display:"block",fontSize:11,color:"#94a3b8",marginBottom:4}}>تاريخ النهاية</label>
-                <input type="date" value={weekForm.endDate} onChange={e=>setWeekForm(p=>({...p,endDate:e.target.value}))}
-                  style={{width:"100%",background:"#0a0e1a",border:"1px solid #1e2d4a",borderRadius:6,padding:"8px 9px",color:"#e2e8f0",fontSize:12,outline:"none"}}/>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={createWeek} disabled={weekBusy}
-                style={{background:"#e06a24",color:"#fff",border:"none",borderRadius:6,padding:"8px 18px",cursor:"pointer",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
-                {weekBusy&&<Spinner s={12} color="#fff"/>}حفظ
-              </button>
-              <button onClick={()=>{setShowWeekForm(false);setWeekErr("");}} style={{background:"#1e2d4a",color:"#94a3b8",border:"none",borderRadius:6,padding:"8px 14px",cursor:"pointer",fontSize:12}}>إلغاء</button>
-            </div>
-          </div>
-        )}
-
-        <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:360}}>
-            <thead><tr style={{background:"#0a0e1a",borderBottom:"1px solid #1e2d4a"}}>
-              {["الأسبوع","من","إلى"].map(h=>(
-                <th key={h} style={{padding:"9px 12px",textAlign:"center",color:"#64748b"}}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {workWeeks.length===0&&(
-                <tr><td colSpan={3} style={{padding:20,textAlign:"center",color:"#475569"}}>لا توجد أسابيع مسجلة بعد</td></tr>
-              )}
-              {workWeeks.map(w=>(
-                <tr key={w.id} className="trh" style={{borderBottom:"1px solid #1a2744"}}>
-                  <td style={{padding:"9px 12px",color:"#e2e8f0",textAlign:"center",fontWeight:600}}>أسبوع {w.week_number}</td>
-                  <td style={{padding:"9px 12px",color:"#94a3b8",textAlign:"center",fontFamily:"monospace"}}>{fmtDateStr(w.start_date)}</td>
-                  <td style={{padding:"9px 12px",color:"#94a3b8",textAlign:"center",fontFamily:"monospace"}}>{fmtDateStr(w.end_date)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 /* ---- TOASTS (إشعارات أخطاء عابرة) ---- */
@@ -2044,6 +1938,90 @@ function FullLoader({msg}){
   );
 }
 
+/* ---- Cleanup Modal (HANDOFF §9): مسح ملفات أيام أسبوع محدد مع Confirmation ---- */
+function CleanupModal({grid,defaultWeekNumber,currentWorkDayId,onClose,addToast,onDone}){
+  const[weekNumber,setWeekNumber]=useState(defaultWeekNumber);
+  const[checked,setChecked]=useState(()=>Object.fromEntries(DAY_ORDER.map(d=>[d,true])));
+  const[busy,setBusy]=useState(false);
+  const week=grid.find(w=>w.weekNumber===weekNumber)||null;
+  const selectedCount=Object.values(checked).filter(Boolean).length;
+
+  function toggleDay(d){ setChecked(p=>({...p,[d]:!p[d]})); }
+  function setAll(v){ setChecked(Object.fromEntries(DAY_ORDER.map(d=>[d,v]))); }
+
+  async function handleConfirm(){
+    if(!week){ addToast("الأسبوع غير موجود","error"); return; }
+    const workDayIds=DAY_ORDER.filter(d=>checked[d]).map(d=>{
+      const day=week.days.find(x=>x.dayName===d);
+      return day?day.id:null;
+    }).filter(Boolean);
+    if(workDayIds.length===0){ addToast("اختر يومًا واحدًا على الأقل","error"); return; }
+    const warning=`سيتم حذف كل الملفات في ${workDayIds.length} يوم/أيام من ${WEEK_LABEL_AR[weekNumber]} بلا أي استثناء (بما فيها ملفات قيد التشغيل والقطع)، من الماكينتين وقائمة الانتظار معًا.\n\nالتاريخ الإحصائي لن يتأثر.\n\nهذا الإجراء لا يمكن التراجع عنه. متابعة؟`;
+    if(!window.confirm(warning)) return;
+    setBusy(true);
+    try{
+      const result=await Api.cleanupFiles(workDayIds,currentWorkDayId);
+      addToast(result.deletedCount>0?`تم حذف ${result.deletedCount} ملف/ملفات`:"لا توجد ملفات لحذفها في الأيام المختارة",'success');
+      onDone();
+      onClose();
+    }catch(e){
+      addToast(e.message||"فشل تنفيذ Cleanup",'error');
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+      <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:14,padding:18,width:"100%",maxWidth:420,maxHeight:"90vh",overflow:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <span style={{color:"#e2e8f0",fontWeight:700,fontSize:15}}>مسح ملفات أيام الأسبوع</span>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer"}}><I n="x" s={18}/></button>
+        </div>
+
+        <div style={{color:"#eab308",background:"#3a2f0d",border:"1px solid #7c5e0d",borderRadius:8,padding:"8px 10px",fontSize:11.5,marginBottom:14,lineHeight:1.6}}>
+          يحذف كل الملفات في الأيام المحددة بلا أي استثناء (WAITING/WORKING/CUTTING/DELIVERED). التاريخ الإحصائي لا يتأثر أبدًا.
+        </div>
+
+        <label style={{display:"block",color:"#94a3b8",fontSize:12,marginBottom:6}}>الأسبوع</label>
+        <select value={weekNumber} onChange={e=>setWeekNumber(Number(e.target.value))}
+          style={{width:"100%",background:"#131b34",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"8px 10px",fontSize:12,marginBottom:14}}>
+          {[1,2,3,4].map(n=>(<option key={n} value={n}>{WEEK_LABEL_AR[n]}</option>))}
+        </select>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <span style={{color:"#94a3b8",fontSize:12}}>الأيام (كلها محددة افتراضيًا — ألغِ تحديد ما تريد الاحتفاظ به)</span>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setAll(true)} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:11}}>تحديد الكل</button>
+            <button onClick={()=>setAll(false)} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:11}}>إلغاء الكل</button>
+          </div>
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+          {DAY_ORDER.map(d=>(
+            <label key={d} style={{display:"flex",alignItems:"center",gap:8,background:"#131b34",borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:13,color:"#e2e8f0"}}>
+              <input type="checkbox" checked={!!checked[d]} onChange={()=>toggleDay(d)}/>
+              {DAY_NAME_AR[d]}
+            </label>
+          ))}
+        </div>
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} disabled={busy}
+            style={{flex:1,background:"#131b34",color:"#94a3b8",border:"1px solid #1e2d4a",borderRadius:8,padding:"9px 14px",fontSize:13,cursor:"pointer"}}>
+            إلغاء
+          </button>
+          <button onClick={handleConfirm} disabled={busy||selectedCount===0}
+            style={{flex:1,background:"#ef4444",color:"#fff",border:"none",borderRadius:8,padding:"9px 14px",fontSize:13,fontWeight:600,cursor:busy?"default":"pointer",opacity:busy||selectedCount===0?0.6:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            {busy?<Spinner s={13} color="#fff"/>:<I n="trash" s={14}/>}
+            حذف ({selectedCount})
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---- ROOT APP ---- */
 function App(){
   const[user,su]=useState(null);
@@ -2060,10 +2038,16 @@ function App(){
   const[authErr,sAuthErr]=useState("");
   const[toasts,sToasts]=useState([]);
   const[lightboxSrc,setLightboxSrc]=useState(null);
-  const[workDays,sWorkDays]=useState([]);
-  const[workWeeks,sWorkWeeks]=useState([]);
-  const[activeDay,sActiveDay]=useState(null);
+  /* شبكة استقلال الأيام: 4 أسابيع ثابتة × 7 أيام (الجمعة→الخميس) — كل خانة مستقلة تمامًا ولها ملفاتها الخاصة */
+  const[grid,sGrid]=useState([]);
+  const[weekNumber,setWeekNumber]=useState(1);
+  const[dayName,setDayName]=useState(DAY_ORDER[0]);
+  const[showCleanup,setShowCleanup]=useState(false);
   const socketRef=useRef(null);
+
+  const currentWeek=grid.find(w=>w.weekNumber===weekNumber)||null;
+  const currentDay=currentWeek? currentWeek.days.find(d=>d.dayName===dayName) : null;
+  const workDayId=currentDay? currentDay.id : null;
 
   const addToast=useCallback((msg,type='error')=>{
     const id=Date.now()+Math.random();
@@ -2072,12 +2056,13 @@ function App(){
   },[]);
 
   // -------- جلب البيانات --------
+  // workDayId مطلوب: كل استدعاء يجلب فقط ملفات الخانة (الأسبوع × اليوم) المختارة حاليًا في الهيدر
   const refreshMachines=useCallback(async()=>{
     try{
-      const data=await Api.getMachines();
+      const data=await Api.getMachines(workDayId);
       sb(data.big); ss(data.small); sq(data.queue||null);
     }catch(e){ addToast(e.message,'error'); }
-  },[addToast]);
+  },[addToast,workDayId]);
 
   const refreshUsers=useCallback(async()=>{
     if(user?.role!=="admin") return;
@@ -2095,13 +2080,10 @@ function App(){
     catch(e){ /* صامت */ }
   },[]);
 
-  const refreshWorkDays=useCallback(async()=>{
-    if(user?.role!=="admin") return;
-    try{
-      const [days,weeks,active]=await Promise.all([Api.getWorkDays(),Api.getWorkWeeks(),Api.getActiveWorkDay()]);
-      sWorkDays(days); sWorkWeeks(weeks); sActiveDay(active||null);
-    }catch(e){ /* صامت */ }
-  },[user]);
+  const refreshWorkGrid=useCallback(async()=>{
+    try{ sGrid(await Api.getWorkGrid()); }
+    catch(e){ /* صامت */ }
+  },[]);
 
   const refreshAll=useCallback(async()=>{
     await Promise.all([refreshMachines(),refreshLogs(),refreshNotifs()]);
@@ -2124,12 +2106,19 @@ function App(){
     })();
   },[]);
 
-  // بعد تسجيل الدخول الناجح: جلب كل البيانات
+  // بعد تسجيل الدخول الناجح: جلب كل البيانات (شبكة الأيام/الأسابيع متاحة لأي مستخدم مسجّل دخول)
   useEffect(()=>{
     if(!user) return;
     refreshAll();
-    if(user.role==="admin"){ refreshUsers(); refreshWorkDays(); }
+    refreshWorkGrid();
+    if(user.role==="admin"){ refreshUsers(); }
   },[user]);
+
+  // إعادة جلب الماكينات فور تغيّر الخانة المختارة (الأسبوع × اليوم) — استقلال تام بين الخانات
+  useEffect(()=>{
+    if(!user || !workDayId) return;
+    refreshMachines();
+  },[user,workDayId]);
 
   // -------- Socket.io: التحديث اللحظي --------
   useEffect(()=>{
@@ -2152,17 +2141,8 @@ function App(){
     socket.on("presence:update",({userId,online})=>{
       sus(prev=>prev.map(u=>u.online===null||u.online===undefined?u:(u.id===userId?{...u,online}:u)));
     });
-    socket.on("workday:update",(day)=>{
-      sWorkDays(prev=>{
-        const idx=prev.findIndex(d=>d.id===day.id);
-        if(idx===-1) return [day,...prev];
-        const next=[...prev]; next[idx]={...next[idx],...day}; return next;
-      });
-      sActiveDay(prev=>day.is_active?day:(prev&&prev.id===day.id?null:prev));
-    });
-    socket.on("workweek:new",(week)=>{
-      sWorkWeeks(prev=>[week,...prev]);
-    });
+    // ملاحظة: أحداث "workday:update"/"workweek:new" أُزيلت من الباك إند — شبكة الأسابيع/الأيام أصبحت
+    // ثابتة (4×7 خانة مزروعة مسبقًا) ولا تتغيّر بعد الإنشاء، فلا حاجة لبثّ لحظي بشأنها.
     // 🆕 تحديث لحظي لقائمة المستخدمين عند إضافة/حذف مستخدم من جلسة أخرى (غرفة admins فقط من طرف السيرفر)
     socket.on("user:new",(newUser)=>{
       sus(prev=>prev.some(u=>u.id===newUser.id)?prev:[...prev,newUser]);
@@ -2181,7 +2161,7 @@ function App(){
     };
     const catchUpSync=()=>{
       refreshAll();
-      if(user.role==="admin"){ refreshUsers(); refreshWorkDays(); }
+      if(user.role==="admin"){ refreshUsers(); }
     };
     socket.on("disconnect",()=>{
       stopFallback();
@@ -2227,7 +2207,6 @@ function App(){
     {id:"admin",l:"الرئيسية",n:"home"},
     {id:"users",l:"المستخدمون",n:"users"},
     {id:"logs",l:"السجل",n:"rep"},
-    {id:"workdays",l:"أيام العمل",n:"cal"},
     {id:"notifications",l:"الإشعارات",n:"bell"},
     {id:"statistics",l:"الإحصائيات",n:"chart"},
   ];
@@ -2273,6 +2252,35 @@ function App(){
           </button>
         </div>
       </div>
+
+      {/* شريط اختيار الأسبوع واليوم — الأيام السبعة مستقلة تمامًا (الجمعة→الخميس) × 4 أسابيع */}
+      {(page==="admin"||page==="operator")&&(
+        <div className="mobile-stack" style={{background:"#0d1224",borderBottom:"1px solid #1e2d4a",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"8px 12px",position:"sticky",top:56,zIndex:90,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {DAY_ORDER.map(d=>(
+              <button key={d} onClick={()=>setDayName(d)}
+                style={{background:dayName===d?"#7c3aed":"#131b34",color:dayName===d?"#fff":"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s"}}>
+                {DAY_NAME_AR[d]}
+              </button>
+            ))}
+          </div>
+          <select value={weekNumber} onChange={e=>setWeekNumber(Number(e.target.value))}
+            style={{background:"#131b34",color:"#e2e8f0",border:"1px solid #1e2d4a",borderRadius:8,padding:"7px 12px",fontSize:12,cursor:"pointer"}}>
+            {[1,2,3,4].map(n=>(<option key={n} value={n}>{WEEK_LABEL_AR[n]}</option>))}
+          </select>
+          {user?.role==="admin"&&page==="admin"&&(
+            <button onClick={()=>setShowCleanup(true)} title="مسح ملفات أيام الأسبوع"
+              style={{display:"flex",alignItems:"center",gap:6,background:"#131b34",color:"#ef4444",border:"1px solid #3a1e1e",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+              <I n="trash" s={13}/>Cleanup
+            </button>
+          )}
+        </div>
+      )}
+
+      {showCleanup&&(
+        <CleanupModal grid={grid} defaultWeekNumber={weekNumber} currentWorkDayId={workDayId}
+          onClose={()=>setShowCleanup(false)} addToast={addToast} onDone={refreshMachines}/>
+      )}
 
       {/* NOTIFICATIONS */}
       {showN&&(
@@ -2347,13 +2355,12 @@ function App(){
 
         {/* CONTENT */}
         <div style={{flex:1,overflow:"auto",padding:14}}>
-          {page==="admin"&&<AdminDash big={big} small={small} queue={queue} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc}/>}
+          {page==="admin"&&<AdminDash big={big} small={small} queue={queue} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc} workDayId={workDayId}/>}
           {page==="operator"&&<OpDash big={big} small={small} onChanged={refreshMachines} addToast={addToast} onOpenImage={setLightboxSrc}/>}
           {page==="users"&&user?.role==="admin"&&<UsersPage users={users} currentUser={user} onChanged={onUserChanged} addToast={addToast}/>}
           {page==="logs"&&user?.role==="admin"&&<LogsPage logs={logs} currentUser={user}/>}
-          {page==="workdays"&&user?.role==="admin"&&<WorkDaysPage workDays={workDays} workWeeks={workWeeks} activeDay={activeDay} isAdmin={user?.role==="admin"} onChanged={refreshWorkDays} addToast={addToast}/>}
           {page==="notifications"&&<NotificationsPage addToast={addToast} onMarkAllRead={markRead}/>}
-          {page==="statistics"&&user?.role==="admin"&&<StatisticsPage addToast={addToast}/>}
+          {page==="statistics"&&user?.role==="admin"&&<StatisticsPage addToast={addToast} socket={socketRef.current}/>}
         </div>
       </div>
 

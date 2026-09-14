@@ -5,37 +5,59 @@ const { secondsToTime, addDaysToDateStr, splitIntervalByDay } = require('../util
 
 // صفحة Statistics مخصَّصة للمشرف فقط حاليًا (نفس نمط users/logs/workdays في هذا المشروع)
 //
-// 🆕 قاعدة منتصف الليل (Midnight Rule) — القرار النهائي المطبَّق فعليًا هنا:
-// أي فترة (تشغيل ماكينة من machine_runtime_logs، أو جلسة مشغّل من operator_sessions)
-// تُقسَّم على مستوى الثانية بين كل الأيام التقويمية التي تمر بها فعليًا، بدل نسب
-// المدة كاملة ليوم البداية فقط. نفس المنطق يُطبَّق أيضًا على حدود المدى نفسه
-// (بداية/نهاية الأسبوع أو الشهر): أي فترة تبدأ قبل المدى أو تنتهي بعده تُقصّ على
-// حدود المدى بدل استبعادها بالكامل أو احتساب جزء خارج المدى بالخطأ. التقسيم يتم في
-// الكود (utils/time.js -> splitIntervalByDay) على نصوص DATETIME خام (dateStrings:
-// true) بدون أي تحويل Date عبر الـdriver، تفاديًا لأي انزياح منطقة زمنية.
+// 🆕 مصدر إحصائيات "وقت تشغيل الماكينات" (GET /machines) هو الآن File Time
+// (machine_files.time_seconds + file_time_archive)، وليس machine_runtime_logs —
+// انظر التوثيق أعلى مسار /machines أدناه وHANDOFF.md لتفاصيل القرار والسبب.
+//
+// قاعدة منتصف الليل (Midnight Rule) — ما زالت مطبَّقة فقط على جلسات المشغّلين
+// (operator_sessions في مسار /operators أدناه، عبر فترة login_at→logout_at):
+// أي جلسة تُقسَّم على مستوى الثانية بين كل الأيام التقويمية التي تمر بها فعليًا،
+// بدل نسب المدة كاملة ليوم البداية فقط. نفس المنطق يُطبَّق أيضًا على حدود المدى
+// نفسه (بداية/نهاية الأسبوع أو الشهر): أي فترة تبدأ قبل المدى أو تنتهي بعده تُقصّ
+// على حدود المدى بدل استبعادها بالكامل أو احتساب جزء خارج المدى بالخطأ. التقسيم
+// يتم في الكود (utils/time.js -> splitIntervalByDay) على نصوص DATETIME خام
+// (dateStrings: true) بدون أي تحويل Date عبر الـdriver، تفاديًا لأي انزياح منطقة زمنية.
+// إحصائيات الماكينات (/machines) لا تحتاج هذا التقسيم لأن كل وقت ملف نقطة زمنية
+// واحدة (time_recorded_at)، لا فترة بداية/نهاية.
 module.exports = () => {
   const router = express.Router();
   router.use(authenticate, requireAdmin);
+
+  // 🆕 (إصلاح القيد الموثّق في HANDOFF §21 "Bugs"): بعد تحويل work_weeks إلى
+  // 4 خانات ثابتة (Week 1-4) بدون start_date/end_date حقيقيين، لم يعد ممكنًا
+  // ربط الإحصائيات الأسبوعية بـweekId. الحل المطبَّق هنا (مطابق للتصميم
+  // المرجعي المرسل الذي يعرض مدى تاريخ حقيقي "17-09-2026 → 13-09-2026" وليس
+  // "الأسبوع 1/2/3/4"): الإحصائيات الأسبوعية تعتمد الآن على أسبوع تقويمي حقيقي
+  // (الجمعة → الخميس) محسوب من `weekStart` (تاريخ الجمعة، YYYY-MM-DD) القادم
+  // من الواجهة، بدل الاعتماد على الشبكة الوهمية. هذا مستقل تمامًا عن نموذج
+  // Week1-4/WAITING transfer في machine_files (ذاك لا علاقة له بالإحصائيات).
+  function resolveWeekStart(dateStr) {
+    // يرجع تاريخ أقرب جمعة <= dateStr (أو اليوم الحالي لو لم يُمرَّر تاريخ)
+    const base = dateStr ? new Date(dateStr + 'T00:00:00Z') : new Date();
+    const day = base.getUTCDay(); // 0=Sun..6=Sat, الجمعة=5
+    const diff = (day - 5 + 7) % 7; // كم يومًا رجّع لآخر جمعة
+    const y = base.getUTCFullYear(), mo = base.getUTCMonth(), d = base.getUTCDate();
+    return msToDateStrUTC(Date.UTC(y, mo, d - diff));
+  }
+  function msToDateStrUTC(ms) {
+    const dt = new Date(ms);
+    return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+  }
 
   // يحسب مدى half-open [start, end) فعلي (DATETIME كنص) بحسب scope=week|month.
   // end دائمًا "اليوم التالي لآخر يوم في المدى الساعة 00:00:00" (وليس 23:59:59
   // لآخر يوم) حتى تصير مقارنات التداخل (start < end) بسيطة وصحيحة عند القصّ.
   async function resolveRange(query) {
-    const { scope, weekId, year, month } = query;
+    const { scope, weekStart, year, month } = query;
     if (scope === 'week') {
-      const id = parseInt(weekId, 10);
-      if (!id) return { error: 'weekId مطلوب لنوع week' };
-      const [rows] = await pool.query(
-        `SELECT week_number, DATE_FORMAT(start_date,'%Y-%m-%d') AS start_date, DATE_FORMAT(end_date,'%Y-%m-%d') AS end_date
-         FROM work_weeks WHERE id = ?`,
-        [id]
-      );
-      const week = rows[0];
-      if (!week) return { error: 'الأسبوع غير موجود' };
+      const start = resolveWeekStart(weekStart);
+      const end = addDaysToDateStr(start, 7);
+      const endLabel = addDaysToDateStr(start, 6);
       return {
-        start: `${week.start_date} 00:00:00`,
-        end: `${addDaysToDateStr(week.end_date, 1)} 00:00:00`,
-        label: `الأسبوع ${week.week_number} (${week.start_date} — ${week.end_date})`
+        start: `${start} 00:00:00`,
+        end: `${end} 00:00:00`,
+        weekStart: start,
+        label: `الأسبوع (${endLabel} — ${start})`
       };
     }
     if (scope === 'month') {
@@ -52,39 +74,62 @@ module.exports = () => {
     return { error: "scope يجب أن يكون 'week' أو 'month'" };
   }
 
-  // إحصائيات وقت تشغيل الماكينات الفعلي (Runtime حقيقي من machine_runtime_logs)
+  // إحصائيات وقت تشغيل الماكينات
+  // 🆕 (قرار مستخدم صريح — انظر HANDOFF.md "تصحيح مصدر الإحصائيات"): المصدر الآن
+  // هو "وقت الملف" (machine_files.time_seconds) — أي نفس الرقم الظاهر في بطاقة
+  // الماكينة تحت "مجموع وقت الملفات" — وليس machine_runtime_logs ولا زر
+  // تسجيل بدء/توقف التشغيل. machine_runtime_logs يبقى موجودًا في قاعدة البيانات
+  // بلا حذف، لكنه لم يعد مصدر بيانات لهذا المسار إطلاقًا.
+  // كل ملف وقتُه نقطة زمنية واحدة (time_recorded_at) لا فترة بداية/نهاية، لذلك
+  // لا حاجة لـsplitIntervalByDay هنا (تلك تبقى مستخدمة فقط في /operators أدناه).
+  // نجمع من مصدرين معًا: machine_files الحيّة (ملفات لم تُحذف بعد) + file_time_archive
+  // (ملفات حُذفت سابقًا عبر حذف فردي/جماعي/Cleanup لكن أُرشِف وقتها قبل الحذف)،
+  // حتى لا تفقد الإحصائيات بياناتها التاريخية بعد أي حذف/Cleanup.
+  // 🆕 فلتر اختياري machineCode (HANDOFF §11) — لو غاب، تُحسَب كل الماكينات (big/small).
   router.get('/machines', async (req, res) => {
     try {
       const range = await resolveRange(req.query);
       if (range.error) return res.status(400).json({ error: range.error });
+      const { machineCode } = req.query;
+      const codeFilter = (machineCode === 'big' || machineCode === 'small') ? machineCode : null;
 
-      // نجلب كل الدورات التي تتقاطع زمنيًا مع المدى (حتى لو بدأت قبله أو انتهت
-      // بعده) — القصّ الفعلي يحدث لاحقًا في splitIntervalByDay، وليس هنا.
-      // dateStrings صراحةً لتفادي أي تحويل Date عبر الـdriver.
-      const [rows] = await pool.query(
+      // dateStrings صراحةً لتفادي أي تحويل Date عبر الـdriver (نفس نمط بقية الملف).
+      const [liveRows] = await pool.query(
         {
-          sql: `SELECT l.id, m.code,
-                       l.started_at AS started_at, l.stopped_at AS stopped_at
-                FROM machine_runtime_logs l
-                JOIN machines m ON m.id = l.machine_id
-                WHERE m.code IN ('big','small') AND l.started_at < ? AND l.stopped_at > ?`,
+          sql: `SELECT m.code, mf.time_seconds AS seconds,
+                       COALESCE(mf.time_recorded_at, mf.created_at) AS recorded_at
+                FROM machine_files mf
+                JOIN machines m ON m.id = mf.machine_id
+                WHERE m.code IN ('big','small') ${codeFilter ? 'AND m.code = ?' : ''}
+                  AND mf.time_seconds > 0
+                  AND COALESCE(mf.time_recorded_at, mf.created_at) >= ?
+                  AND COALESCE(mf.time_recorded_at, mf.created_at) < ?`,
           dateStrings: true
         },
-        [range.end, range.start]
+        codeFilter ? [codeFilter, range.start, range.end] : [range.start, range.end]
+      );
+
+      const [archivedRows] = await pool.query(
+        {
+          sql: `SELECT m.code, fta.seconds AS seconds, fta.recorded_at AS recorded_at
+                FROM file_time_archive fta
+                JOIN machines m ON m.id = fta.machine_id
+                WHERE m.code IN ('big','small') ${codeFilter ? 'AND m.code = ?' : ''}
+                  AND fta.recorded_at >= ? AND fta.recorded_at < ?`,
+          dateStrings: true
+        },
+        codeFilter ? [codeFilter, range.start, range.end] : [range.start, range.end]
       );
 
       const totalsByCode = { big: { totalSeconds: 0, runs: 0 }, small: { totalSeconds: 0, runs: 0 } };
       const dayMap = {};
 
-      for (const row of rows) {
-        const segments = splitIntervalByDay(row.started_at, row.stopped_at, range.start, range.end);
-        if (segments.length === 0) continue;
+      for (const row of [...liveRows, ...archivedRows]) {
+        const date = String(row.recorded_at).slice(0, 10); // "YYYY-MM-DD"
         totalsByCode[row.code].runs += 1;
-        for (const seg of segments) {
-          totalsByCode[row.code].totalSeconds += seg.seconds;
-          if (!dayMap[seg.date]) dayMap[seg.date] = { date: seg.date, big: 0, small: 0 };
-          dayMap[seg.date][row.code] += seg.seconds;
-        }
+        totalsByCode[row.code].totalSeconds += row.seconds;
+        if (!dayMap[date]) dayMap[date] = { date, big: 0, small: 0 };
+        dayMap[date][row.code] += row.seconds;
       }
 
       const [labelRows] = await pool.query(
@@ -94,7 +139,8 @@ module.exports = () => {
 
       res.json({
         label: range.label,
-        machines: ['big', 'small'].map(code => ({
+        weekStart: range.weekStart,
+        machines: (codeFilter ? [codeFilter] : ['big', 'small']).map(code => ({
           code,
           label: labelByCode[code] || code,
           totalSeconds: totalsByCode[code].totalSeconds,
@@ -110,13 +156,21 @@ module.exports = () => {
   });
 
   // إحصائيات جلسات المشغّلين (حضور/انصراف — من operator_sessions، role='operator' فقط)
+  // 🆕 فلتر اختياري userId (HANDOFF §11 "اختيار مشغل يجب أن يفلتر الإحصائيات
+  // الخاصة به") — من Users الحقيقيين، وليس أسماء ثابتة.
   router.get('/operators', async (req, res) => {
     try {
       const range = await resolveRange(req.query);
       if (range.error) return res.status(400).json({ error: range.error });
+      const userIdFilter = parseInt(req.query.userId, 10) || null;
 
-      // كل المشغّلين أولًا (حتى من لا جلسات له = صفوف صفرية)
-      const [users] = await pool.query(`SELECT id, name FROM users WHERE role = 'operator'`);
+      // كل المشغّلين أولًا (حتى من لا جلسات له = صفوف صفرية)، أو مشغّل واحد فقط لو تم الفلتر
+      const [users] = await pool.query(
+        userIdFilter
+          ? `SELECT id, name FROM users WHERE role = 'operator' AND id = ?`
+          : `SELECT id, name FROM users WHERE role = 'operator'`,
+        userIdFilter ? [userIdFilter] : []
+      );
       const totalsByUser = {};
       for (const u of users) totalsByUser[u.id] = { userId: u.id, name: u.name, totalSeconds: 0, closedSessions: 0, openSessions: 0 };
 
@@ -156,7 +210,7 @@ module.exports = () => {
         .map(o => ({ ...o, total: secondsToTime(o.totalSeconds) }))
         .sort((a, b) => b.totalSeconds - a.totalSeconds);
 
-      res.json({ label: range.label, operators });
+      res.json({ label: range.label, weekStart: range.weekStart, operators });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'خطأ في الخادم' });
