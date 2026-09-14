@@ -167,6 +167,7 @@ const Api = {
     if(machineCode) qs.set("machineCode",machineCode);
     return this.request("/api/statistics/machines?"+qs.toString());
   },
+  deleteMachineDayStats(machineCode,date){ return this.request("/api/statistics/machines/day",{method:"DELETE",body:{machineCode,date}}); },
   getOperatorStats({scope,weekStart,year,month,userId}){
     const qs=new URLSearchParams({scope});
     if(weekStart) qs.set("weekStart",weekStart);
@@ -1679,7 +1680,7 @@ function NotificationsPage({addToast,onMarkAllRead}){
 }
 
 /* ---- STATISTICS PAGE (أسبوعية/شهرية — وقت تشغيل الماكينات الفعلي + جلسات المشغّلين) ---- */
-function StatBar({label,seconds,maxSeconds,color}){
+function StatBar({label,seconds,maxSeconds,color,onDelete,deleting}){
   const pct=maxSeconds>0?Math.max(2,Math.round((seconds/maxSeconds)*100)):0;
   return(
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
@@ -1688,6 +1689,12 @@ function StatBar({label,seconds,maxSeconds,color}){
         <div style={{width:pct+"%",height:"100%",background:color,borderRadius:4,transition:"width .3s"}}/>
       </div>
       <div style={{width:60,fontSize:10,color:"#64748b",flexShrink:0,fontFamily:"monospace"}}>{secondsToClock(seconds)}</div>
+      {onDelete&&seconds>0&&(
+        <button onClick={onDelete} disabled={deleting} title="حذف إحصائيات هذا اليوم لهذه الماكينة"
+          style={{width:22,height:22,flexShrink:0,background:"#2a1420",color:"#f87171",border:"1px solid #4a1f2e",borderRadius:6,cursor:deleting?"default":"pointer",fontSize:12,lineHeight:1,opacity:deleting?0.5:1}}>
+          {deleting?"…":"🗑"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1722,6 +1729,11 @@ function ddmmyyyy(dateStr){
   const[y,m,d]=dateStr.split("-");
   return `${d}-${m}-${y}`;
 }
+// تاريخ اليوم الحالي بصيغة YYYY-MM-DD — يُستخدَم في بادچ التاريخ التلقائي بالشريط العلوي
+function todayDateStr(){
+  const d=new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
 
 function StatisticsPage({addToast,socket}){
   const[scope,setScope]=useState("week");
@@ -1735,6 +1747,7 @@ function StatisticsPage({addToast,socket}){
   const[mStats,setMStats]=useState(null);
   const[oStats,setOStats]=useState(null);
   const[loading,setLoading]=useState(false);
+  const[deletingKey,setDeletingKey]=useState(null); // "date:code" الجاري حذفه حاليًا
 
   useEffect(()=>{
     // المشغّلون الحقيقيون من Users (HANDOFF §11) — وليس أسماء ثابتة بالكود
@@ -1759,6 +1772,24 @@ function StatisticsPage({addToast,socket}){
 
   useEffect(()=>{ load(); },[load]);
 
+  // 🆕 حذف/تصحيح إحصائيات ماكينة معيّنة في يوم معيّن (طلب المستخدم) — تحذير واضح
+  // + تأكيد نصّي قبل التنفيذ لأنه Destructive ولا يمكن التراجع عنه.
+  const handleDeleteDay=useCallback(async(date,code,label)=>{
+    const ok=window.confirm(`هل أنت متأكد من حذف إحصائيات "${label}" ليوم ${date}؟\nهذا الإجراء يصفّر وقت الملفات المسجَّلة في هذا اليوم لهذه الماكينة ولا يمكن التراجع عنه.`);
+    if(!ok) return;
+    const key=date+":"+code;
+    setDeletingKey(key);
+    try{
+      await Api.deleteMachineDayStats(code,date);
+      addToast("تم حذف إحصائيات "+label+" ليوم "+date,'success');
+      load();
+    }catch(e){
+      addToast(e.message||"فشل حذف الإحصائيات",'error');
+    }finally{
+      setDeletingKey(null);
+    }
+  },[addToast,load]);
+
   // 🆕 HANDOFF §13: Auto-Update عبر Socket.io الحالي (بدون إعادة بناء Socket.io — نفس الاتصال المُمرَّر من App).
   // "machine:update" يُبَث أصلاً عند أي تغيير في ملفات الماكينات (بما فيها إدخال/تعديل File Time عبر
   // PATCH /files/:fileId/time، الذي يغذي الإحصائيات مباشرة) وعند الحذف الفردي/الجماعي/Cleanup.
@@ -1779,6 +1810,7 @@ function StatisticsPage({addToast,socket}){
   },[socket,load]);
 
   const maxDaily=mStats?Math.max(1,...mStats.daily.map(d=>Math.max(d.big||0,d.small||0))):1;
+  const labelByCode=mStats?Object.fromEntries(mStats.machines.map(m=>[m.code,m.label])):{};
   const bestMachine=mStats?mStats.machines.slice().sort((a,b)=>b.totalSeconds-a.totalSeconds)[0]:null;
   const totalRuntimeSeconds=mStats?mStats.machines.reduce((s,m)=>s+m.totalSeconds,0):0;
   const dailyAvgSeconds=(mStats&&mStats.daily.length>0)?Math.round(totalRuntimeSeconds/mStats.daily.length):0;
@@ -1865,8 +1897,12 @@ function StatisticsPage({addToast,socket}){
               {mStats.daily.map(d=>(
                 <div key={d.date} style={{marginBottom:8}}>
                   <div style={{fontSize:10,color:"#64748b",marginBottom:2,fontFamily:"monospace"}}>{d.date}</div>
-                  <StatBar label="كبيرة" seconds={d.big||0} maxSeconds={maxDaily} color="#e06a24"/>
-                  <StatBar label="صغيرة" seconds={d.small||0} maxSeconds={maxDaily} color="#60a5fa"/>
+                  <StatBar label="كبيرة" seconds={d.big||0} maxSeconds={maxDaily} color="#e06a24"
+                    onDelete={()=>handleDeleteDay(d.date,"big",labelByCode.big||"الماكينة الكبيرة")}
+                    deleting={deletingKey===d.date+":big"}/>
+                  <StatBar label="صغيرة" seconds={d.small||0} maxSeconds={maxDaily} color="#60a5fa"
+                    onDelete={()=>handleDeleteDay(d.date,"small",labelByCode.small||"الماكينة الصغيرة")}
+                    deleting={deletingKey===d.date+":small"}/>
                 </div>
               ))}
             </div>
@@ -2235,6 +2271,10 @@ function App(){
           <span className="topbar-title" style={{color:"#e06a24",fontWeight:700,fontSize:14,lineHeight:1.2}}>نظام إدارة ماكينات الليزر</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,background:"#131b34",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",color:"#94a3b8",fontSize:12,fontFamily:"monospace"}}>
+            <I n="cal" s={14}/>
+            <span>{todayDateStr()}</span>
+          </div>
           <div style={{position:"relative"}}>
             <button onClick={()=>ssN(p=>!p)} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",position:"relative",display:"flex",padding:4}}>
               <I n="bell" s={20}/>
@@ -2259,7 +2299,7 @@ function App(){
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
             {DAY_ORDER.map(d=>(
               <button key={d} onClick={()=>setDayName(d)}
-                style={{background:dayName===d?"#7c3aed":"#131b34",color:dayName===d?"#fff":"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s"}}>
+                style={{background:dayName===d?"#e06a24":"#131b34",color:dayName===d?"#fff":"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s"}}>
                 {DAY_NAME_AR[d]}
               </button>
             ))}
