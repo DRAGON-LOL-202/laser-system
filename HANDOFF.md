@@ -1,5 +1,46 @@
 # HANDOFF — Laser System Phase 31 FINAL
 
+## 30. Change Log — جلسة اختبار حي مع المستخدم (Live Testing) — إضافة Workflows ناقصة
+
+### السياق
+الموقع فعليًا Live (GitHub + Aiven للـDB + Render للباك/فرونت + Cloudflare R2 للتخزين). طلب المستخدم صراحةً **عدم تعديل أي كود تطبيقي**، والاختبار خطوة بخطوة على الموقع الحي مباشرة مع تسجيل أي Bug فقط دون إصلاح.
+
+### Bug
+فتح المستخدم صفحة **الإحصائيات (شهري، سبتمبر 2026)** على الموقع الحي وظهر خطأ **"خطأ في الخادم"** (Server 500) والصفحة فاضية بالكامل (لقطة شاشة مرفقة من المستخدم).
+
+### Expected
+صفحة الإحصائيات تعرض بيانات شهر سبتمبر 2026 بدون خطأ.
+
+### Cause
+بمقارنة كل ملفات `migration_*.sql` الموجودة في جذر الـrepo مع كل ملفات `.github/workflows/*.yml`، تبيّن أن **2 من أصل 8 ملفات Migration ليس لهما Workflow لتشغيلهما على قاعدة بيانات Aiven الحية**:
+- `migration_file_time_statistics.sql` — يضيف `machine_files.time_recorded_at` وجدول `file_time_archive`. مسار `GET /api/statistics/machines` **يعتمد عليهما مباشرة** في كل استعلام — فبدونهما أي طلب لهذا المسار (أسبوعي أو شهري) يفشل بخطأ SQL "Unknown column/table" → 500 في الواجهة. **هذا هو السبب المباشر والمؤكّد للـBug المُبلَّغ عنه أعلاه**، ويطابق ما كان موثّقًا مسبقًا: "Safe to Deploy: NO — يحتاج تشغيل الـMigration يدويًا أولًا."
+- `migration_day_week_independence.sql` — الترقية الأساسية لكل نموذج Phase 31 (شبكة 28 خانة). كانت أيضًا بلا Workflow؛ لم يتأكَّد بعد أثناء هذه الجلسة هل طُبِّقت يدويًا من قبل المستخدم بطريقة أخرى أم لا — يحتاج تحقق صريح.
+
+### Fix (تم تنفيذه — استثناء وحيد لقاعدة "لا تعديل" في هذه الجلسة، بموافقة ضمنية من المستخدم عند سؤاله "هل هذا التعديلات تحتاج إضافة Workflow")
+أُضيف **Workflow جديدان فقط** (بنفس نمط الـ6 الموجودين مسبقًا حرفيًا — `workflow_dispatch` + تأكيد `yes` + تشغيل ضد Aiven عبر `secrets` + خطوة تحقق بعدها)، **بدون أي تعديل على كود التطبيق نفسه (Backend/Frontend) ولا على أي ملف SQL موجود**:
+- `.github/workflows/migrate-file-time-statistics.yml` → يشغّل `migration_file_time_statistics.sql`.
+- `.github/workflows/migrate-day-week-independence.yml` → يشغّل `migration_day_week_independence.sql`.
+
+### ⚠️ يحتاج تأكيد المستخدم قبل التشغيل
+**لم يتم تشغيل أي Workflow فعليًا بعد** — فقط أُنشئت الملفات. المستخدم يحتاج يدخل تبويب Actions على GitHub، يلاقي الـWorkflow الجديد، يشغّله يدويًا (`workflow_dispatch`) ويكتب `yes` للتأكيد. **يُنصَح بتشغيل `migrate-day-week-independence.yml` أولًا** لو مش متأكد إنه اتشغّل قبل كده (لأن باقي كل شيء في Phase 31 مبني فوقه)، ثم `migrate-file-time-statistics.yml`.
+
+### الاختبارات المنفَّذة
+- `python3 -c "yaml.safe_load(...)"` على الملفين الجديدين — بنية YAML سليمة (تحقق تركيبي فقط، لا بيئة CI فعلية).
+- لم يُشغَّل أي منهما فعليًا على Aiven في هذه الجلسة (لا وصول لـsecrets المستخدم من هنا).
+
+### الملفات المعدَّلة في هذه الجلسة
+- `.github/workflows/migrate-file-time-statistics.yml` (جديد)
+- `.github/workflows/migrate-day-week-independence.yml` (جديد)
+- **لا تعديل على أي ملف تطبيقي** (Backend/Frontend) في هذه الجلسة.
+
+### Database Changes
+لا يوجد تغيير مباشر (الملفان الجديدان أدوات تشغيل فقط لملفات SQL موجودة أصلًا ولم تتغيّر).
+
+### الخطوة التالية المقترحة
+1. المستخدم يشغّل `migrate-day-week-independence.yml` (لو لازم) ثم `migrate-file-time-statistics.yml` من تبويب Actions.
+2. إعادة فتح صفحة الإحصائيات (شهري وأسبوعي) والتأكد من زوال الخطأ.
+3. متابعة خطة الاختبار خطوة بخطوة (استقلال الأيام أولًا).
+
 ## 29. Change Log — تحديث الجلسة الحالية (Auto-Update للإحصائيات عبر Socket.io — القسم 13)
 
 ### ملاحظة هامة قبل البدء
