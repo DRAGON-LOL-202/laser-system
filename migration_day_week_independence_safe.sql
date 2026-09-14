@@ -47,10 +47,33 @@ SET @idx_exists := (
 SET @sql := IF(@idx_exists > 0, 'ALTER TABLE `work_days` DROP INDEX `uq_work_date`', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 2.a) لازم نشيل قيد fk_workday_week القديم الأول (لو لسه موجود)، لأنه معمول
+--      على أساس ON DELETE SET NULL، وده يتعارض منطقيًا مع خلي week_id NOT NULL
+SET @fk_exists := (
+  SELECT COUNT(1) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'work_days'
+    AND CONSTRAINT_NAME = 'fk_workday_week' AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+);
+SET @sql := IF(@fk_exists > 0, 'ALTER TABLE `work_days` DROP FOREIGN KEY `fk_workday_week`', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 ALTER TABLE `work_days`
   MODIFY COLUMN `day_name` ENUM('fri','sat','sun','mon','tue','wed','thu') NOT NULL,
   MODIFY COLUMN `work_date` DATE NULL,
   MODIFY COLUMN `week_id` INT UNSIGNED NOT NULL;
+
+-- 2.b) رجّع الـ FK تاني، لكن بـ ON DELETE RESTRICT بدل SET NULL (أسابيع 1-4
+--      دلوقتي صفوف ثابتة مفروض متتمسحش، فالسلوك المنطقي إننا نمنع حذف
+--      أسبوع لسه مربوط بيه أيام، مش نسيب يوم من غير أسبوع)
+SET @fk_exists := (
+  SELECT COUNT(1) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'work_days'
+    AND CONSTRAINT_NAME = 'fk_workday_week' AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+);
+SET @sql := IF(@fk_exists = 0,
+  'ALTER TABLE `work_days` ADD CONSTRAINT `fk_workday_week` FOREIGN KEY (`week_id`) REFERENCES `work_weeks` (`id`) ON DELETE RESTRICT',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @idx_exists := (
   SELECT COUNT(1) FROM INFORMATION_SCHEMA.STATISTICS
