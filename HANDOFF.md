@@ -1,5 +1,43 @@
 # HANDOFF — Laser System Phase 31 FINAL
 
+## 31. Change Log — فحص Schema الحي الفعلي + نسخة آمنة من migration_day_week_independence.sql
+
+### ما حصل بالضبط (بالترتيب الزمني مع المستخدم)
+1. تشغيل `migrate-day-week-independence.yml` الأصلي فشل فورًا: `ERROR 1091 (42000) at line 9: Can't DROP 'uq_week_start'; check that column/key exists`.
+2. أُضيف Workflow تشخيصي Read-Only بالكامل (`inspect-day-week-schema.yml`) يعرض `SHOW CREATE TABLE` لـ`work_weeks`/`work_days` + محتواهما + عدد `machine_files` المرتبطة بـ`work_day_id`، بدون أي تعديل.
+3. نتيجة الفحص الفعلي على قاعدة بيانات Aiven الحية (وليس افتراضًا):
+   - **`work_weeks`**: `start_date`/`end_date` **NULL-able بالفعل**، و`uq_week_number` **موجود بالفعل** — أي أن جزءًا من الترقية طُبِّق مسبقًا (يدويًا أو في محاولة سابقة غير موثّقة)، لكن **صف واحد فقط** موجود (`week_number=1`, `start_date=2026-09-13`, `end_date=2026-09-17`)؛ week_number 2/3/4 غير مزروعة بعد. `uq_week_start` غير موجود أصلاً (لذلك فشل الحذف).
+   - **`work_days`**: **لا يزال في الحالة القديمة بالكامل** — `day_name` بدون `'fri'`، `work_date` لا يزال `NOT NULL`، `uq_work_date` غير موجود أصلاً (سيفشل حذفه بنفس الخطأ لو استمر تنفيذ الملف القديم)، ولا يوجد `uq_week_day`. صفان فقط: `id=1` (الأحد، `week_id=NULL`) و`id=3` (الاثنين، `week_id=1`).
+   - **`machine_files`**: **0 صفوف** تشاور على `work_day_id` حاليًا — **لا يوجد أي خطر فقدان بيانات ملفات** من تعديل بنية `work_days`.
+4. **السبب الجذري**: قاعدة البيانات الحية في حالة وسطى غير متطابقة مع أي من "قبل" أو "بعد" ملف الـMigration الأصلي بالكامل — على الأرجح نتيجة محاولة/تدخّل يدوي جزئي سابق غير موثّق في أي Change Log سابق. ملف الـMigration الأصلي مكتوب بافتراض حالة "قبل" نظيفة بالكامل (تطابق `database.sql`)، فلا يصلح للتشغيل هنا كما هو.
+
+### Fix (تم تنفيذه)
+أُنشئ ملف **جديد منفصل** (لم يُعدَّل الأصلي — يبقى كسجل تاريخي لما حدث):
+- `migration_day_week_independence_safe.sql`: نسخة **Idempotent** بالكامل — كل `DROP INDEX`/`ADD UNIQUE KEY` يتحقق أولاً من `INFORMATION_SCHEMA.STATISTICS` قبل التنفيذ (عبر `PREPARE`/`EXECUTE` ديناميكي) بدل الافتراض الأعمى. أُضيف أيضًا سطر واحد `UPDATE work_days SET week_id = 1 WHERE week_id IS NULL` **قبل** تحويل `week_id` إلى `NOT NULL` — لإصلاح الصف الوحيد (`id=1`) اللي كان سيمنع هذا التحويل، عن طريق ربطه بالأسبوع 1 الحالي (تاريخه 2026-09-13 يقع فعليًا داخل مدى الأسبوع 1: 2026-09-13→2026-09-17). **لا حذف لأي صف** — الصفان القديمان (`id=1`,`id=3`) سيندمجان تلقائيًا كخانتي (week1/sun) و(week1/mon) في الشبكة الجديدة بفضل `uq_week_day` + `INSERT IGNORE`.
+- `.github/workflows/migrate-day-week-independence-safe.yml`: يشغّل الملف الآمن الجديد (نفس نمط باقي الـWorkflows).
+
+### ⚠️ يحتاج تشغيل فعلي وتأكيد
+لم يُشغَّل هذا الملف بعد على Aiven. المستخدم يحتاج يرفع الملفين، ويشغّل **`ترقية قاعدة البيانات (استقلال الأيام والأسابيع — نسخة آمنة)`** من Actions (مش القديم، لأنه هيستمر يفشل). خطوة التحقق بعده هتعرض عدد الأسابيع (متوقَّع 4) وعدد الأيام (متوقَّع 28) وقائمة كل خانة.
+
+### الاختبارات المنفَّذة
+- `python3 -c "yaml.safe_load(...)"` على الـWorkflow الجديد — سليم.
+- تحقق يدوي من توازن `PREPARE stmt`/`DEALLOCATE PREPARE` (4/4) في ملف الـSQL الجديد — لا بيئة MySQL فعلية متاحة هنا لتشغيله فعليًا (نفس قيد الشبكة الموثّق سابقًا)، فالتحقق تركيبي/منطقي يدوي فقط.
+- **لم يتم** تشغيل فعلي على Aiven بعد.
+
+### الملفات المعدَّلة/المضافة في هذه الجلسة
+- `.github/workflows/inspect-day-week-schema.yml` (جديد، Read-Only)
+- `migration_day_week_independence_safe.sql` (جديد — لا تعديل على الأصلي)
+- `.github/workflows/migrate-day-week-independence-safe.yml` (جديد)
+- لا تعديل على أي كود تطبيقي (Backend/Frontend).
+
+### Database Changes
+لم يُطبَّق أي تغيير بعد من هذه الجلسة (الملفات أدوات تشغيل/فحص فقط). التغيير المخطَّط موثّق بالتفصيل أعلاه.
+
+### الخطوة التالية المقترحة
+1. تشغيل `migrate-day-week-independence-safe.yml` وتأكيد أن الشبكة أصبحت 4 أسابيع × 7 أيام = 28 خانة.
+2. تشغيل `migrate-file-time-statistics.yml` (لسه من §30، لم يُشغَّل بعد).
+3. إعادة اختبار صفحة الإحصائيات، ثم الرجوع لخطة الاختبار خطوة بخطوة (استقلال الأيام أولًا).
+
 ## 30. Change Log — جلسة اختبار حي مع المستخدم (Live Testing) — إضافة Workflows ناقصة
 
 ### السياق
