@@ -1,0 +1,33 @@
+name: تشخيص فقط (Schema الحالي لـ work_weeks/work_days)
+
+# ⚠️ Read-Only بالكامل — لا يعدّل ولا يحذف أي شيء، فقط يعرض شكل الجدولين الحقيقي
+# الهدف: معرفة السبب الحقيقي لفشل migrate-day-week-independence.yml قبل أي تعديل
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect-database:
+    runs-on: ubuntu-latest
+    steps:
+      - name: تثبيت عميل MySQL
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: عرض تعريف الجدولين الفعلي (بدون أي تعديل)
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          echo "===== SHOW CREATE TABLE work_weeks ====="
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SHOW CREATE TABLE work_weeks\G"
+          echo
+          echo "===== SHOW CREATE TABLE work_days ====="
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SHOW CREATE TABLE work_days\G"
+          echo
+          echo "===== محتوى work_weeks الحالي ====="
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SELECT * FROM work_weeks;"
