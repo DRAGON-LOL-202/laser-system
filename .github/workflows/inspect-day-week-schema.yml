@@ -31,3 +31,11 @@ jobs:
           echo "===== محتوى work_weeks الحالي ====="
           mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
                 --ssl-mode=REQUIRED "$DB_NAME" -e "SELECT * FROM work_weeks;"
+          echo
+          echo "===== عدد صفوف work_days وتوزيعها ====="
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SELECT COUNT(*) AS total_rows, SUM(week_id IS NULL) AS null_week_id, SUM(day_name='fri') AS fri_rows FROM work_days; SELECT id, work_date, day_name, week_id, is_active FROM work_days ORDER BY id LIMIT 50;"
+          echo
+          echo "===== هل يوجد machine_files تشاور على work_day_id ====="
+          mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" \
+                --ssl-mode=REQUIRED "$DB_NAME" -e "SELECT COUNT(*) AS files_with_workday FROM machine_files WHERE work_day_id IS NOT NULL;"
