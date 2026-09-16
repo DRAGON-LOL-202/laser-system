@@ -65,7 +65,7 @@ app.use('/api/machines', require('./routes/machines')(io));
 app.use('/api/work', require('./routes/workdays')(io));
 app.use('/api/logs', require('./routes/logs')());
 app.use('/api/notifications', require('./routes/notifications')());
-app.use('/api/statistics', require('./routes/statistics')());
+app.use('/api/statistics', require('./routes/statistics')(io));
 
 // قائمة المستخدمين المتصلين الآن (يُستخدم عند تحميل الصفحة لأول مرة)
 app.get('/api/presence', (req, res) => {
