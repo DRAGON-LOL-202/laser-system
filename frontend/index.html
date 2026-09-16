@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>نظام إدارة ماكينات الليزر</title>
 <link rel="icon" href="./assets/logo-mark.png" type="image/png">
+<link rel="manifest" href="./manifest.json">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <!--
   ====================================================================
   ملف إعداد الاتصال بالسيرفر — عدّل القيمة هنا بعد رفع الباك إند
@@ -45,7 +47,7 @@ select option{background:#0d1224;color:#e2e8f0;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useLayoutEffect,useCallback,useRef}=React;
+const {useState,useEffect,useLayoutEffect,useCallback,useRef,useMemo}=React;
 
 /* ====================================================================
    إعدادات الاتصال بالسيرفر
@@ -167,6 +169,7 @@ const Api = {
     if(machineCode) qs.set("machineCode",machineCode);
     return this.request("/api/statistics/machines?"+qs.toString());
   },
+  deleteMachineDayStats(machineCode,date){ return this.request("/api/statistics/machines/day",{method:"DELETE",body:{machineCode,date}}); },
   getOperatorStats({scope,weekStart,year,month,userId}){
     const qs=new URLSearchParams({scope});
     if(weekStart) qs.set("weekStart",weekStart);
@@ -174,6 +177,14 @@ const Api = {
     if(month) qs.set("month",month);
     if(userId) qs.set("userId",userId);
     return this.request("/api/statistics/operators?"+qs.toString());
+  },
+  getOperatorSessions({scope,weekStart,year,month,userId}){
+    const qs=new URLSearchParams({scope});
+    if(weekStart) qs.set("weekStart",weekStart);
+    if(year) qs.set("year",year);
+    if(month) qs.set("month",month);
+    if(userId) qs.set("userId",userId);
+    return this.request("/api/statistics/operators/sessions?"+qs.toString());
   },
 
   // شبكة استقلال الأيام: 4 أسابيع ثابتة × 7 أيام (الجمعة→الخميس)، كل خانة لها id دائم
@@ -250,6 +261,8 @@ function I({n,s=16}){
     inbox:<><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></>,
     cal:<><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
     chart:<><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,
+    clock:<><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
+    star:<><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></>,
   };
   return <svg {...base}>{d[n]||null}</svg>;
 }
@@ -1679,7 +1692,7 @@ function NotificationsPage({addToast,onMarkAllRead}){
 }
 
 /* ---- STATISTICS PAGE (أسبوعية/شهرية — وقت تشغيل الماكينات الفعلي + جلسات المشغّلين) ---- */
-function StatBar({label,seconds,maxSeconds,color}){
+function StatBar({label,seconds,maxSeconds,color,onDelete,deleting}){
   const pct=maxSeconds>0?Math.max(2,Math.round((seconds/maxSeconds)*100)):0;
   return(
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
@@ -1688,6 +1701,12 @@ function StatBar({label,seconds,maxSeconds,color}){
         <div style={{width:pct+"%",height:"100%",background:color,borderRadius:4,transition:"width .3s"}}/>
       </div>
       <div style={{width:60,fontSize:10,color:"#64748b",flexShrink:0,fontFamily:"monospace"}}>{secondsToClock(seconds)}</div>
+      {onDelete&&seconds>0&&(
+        <button onClick={onDelete} disabled={deleting} title="حذف إحصائيات هذا اليوم لهذه الماكينة"
+          style={{width:22,height:22,flexShrink:0,background:"#2a1420",color:"#f87171",border:"1px solid #4a1f2e",borderRadius:6,cursor:deleting?"default":"pointer",fontSize:12,lineHeight:1,opacity:deleting?0.5:1}}>
+          {deleting?"…":"🗑"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1696,11 +1715,18 @@ function secondsToClock(s){
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60);
   return h+"س "+String(m).padStart(2,"0")+"د";
 }
-function StatKpiCard({label,value}){
+function StatKpiCard({label,value,icon,iconColor}){
   return(
-    <div style={{flex:"1 1 160px",background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:"12px 14px"}}>
-      <div style={{color:"#94a3b8",fontSize:11,marginBottom:6}}>{label}</div>
-      <div style={{color:"#e2e8f0",fontSize:18,fontWeight:700}}>{value}</div>
+    <div style={{flex:"1 1 190px",background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,minWidth:0}}>
+      {icon&&(
+        <div style={{width:40,height:40,borderRadius:10,background:(iconColor||"#e06a24")+"22",color:iconColor||"#e06a24",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <I n={icon} s={20}/>
+        </div>
+      )}
+      <div style={{minWidth:0,flex:"1 1 auto"}}>
+        <div style={{color:"#94a3b8",fontSize:11,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{label}</div>
+        <div style={{color:"#e2e8f0",fontSize:18,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={typeof value==="string"?value:undefined}>{value}</div>
+      </div>
     </div>
   );
 }
@@ -1722,6 +1748,170 @@ function ddmmyyyy(dateStr){
   const[y,m,d]=dateStr.split("-");
   return `${d}-${m}-${y}`;
 }
+// تاريخ اليوم الحالي بصيغة YYYY-MM-DD — يُستخدَم في بادچ التاريخ التلقائي بالشريط العلوي
+function todayDateStr(){
+  const d=new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+
+// 🆕 خطاف بسيط لبناء/تحديث رسم Chart.js داخل canvas مع تنظيف تلقائي عند إلغاء التركيب
+function useChartCanvas(buildConfig, deps){
+  const canvasRef=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    if(!canvasRef.current || typeof Chart==="undefined") return;
+    if(chartRef.current){ chartRef.current.destroy(); chartRef.current=null; }
+    chartRef.current=new Chart(canvasRef.current.getContext("2d"), buildConfig());
+    return ()=>{ if(chartRef.current){ chartRef.current.destroy(); chartRef.current=null; } };
+    // eslint-disable-next-line
+  },deps);
+  return canvasRef;
+}
+
+// 🆕 خط أفقي متقطّع لهدف ثابت (ساعات)، مرسوم يدويًا بدون أي مكتبة إضافية
+// (Chart.js الأساسي لا يدعم خطوط Annotation جاهزة).
+function makeTargetLinePlugin(targetHours,label){
+  return {
+    id:"targetLine",
+    afterDraw(chart){
+      const {ctx,chartArea,scales}=chart;
+      if(!chartArea||!scales.y) return;
+      const y=scales.y.getPixelForValue(targetHours);
+      if(y<chartArea.top||y>chartArea.bottom) return;
+      ctx.save();
+      ctx.strokeStyle="#eab308";
+      ctx.setLineDash([6,4]);
+      ctx.lineWidth=1.5;
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left,y);
+      ctx.lineTo(chartArea.right,y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle="#eab308";
+      ctx.font="10px sans-serif";
+      ctx.textAlign="left";
+      ctx.fillText(label,chartArea.left+4,y-4);
+      ctx.restore();
+    }
+  };
+}
+
+// 🆕 رسم خطي: ساعات تشغيل كل ماكينة عبر أيام الفترة المختارة + خط هدف يومي ثابت
+function WeeklyMachinesLineChart({dailyLabels,bigSeconds,smallSeconds,targetHours,labelByCode}){
+  const key=dailyLabels.join(",")+"|"+bigSeconds.join(",")+"|"+smallSeconds.join(",")+"|"+targetHours;
+  const canvasRef=useChartCanvas(()=>({
+    type:"line",
+    data:{
+      labels:dailyLabels,
+      datasets:[
+        {
+          label:labelByCode.big||"كبيرة",
+          data:bigSeconds.map(s=>+(s/3600).toFixed(2)),
+          borderColor:"#38bdf8",backgroundColor:"#38bdf822",
+          tension:0.35,pointRadius:3,pointBackgroundColor:"#38bdf8",fill:false
+        },
+        {
+          label:labelByCode.small||"صغيرة",
+          data:smallSeconds.map(s=>+(s/3600).toFixed(2)),
+          borderColor:"#a855f7",backgroundColor:"#a855f722",
+          tension:0.35,pointRadius:3,pointBackgroundColor:"#a855f7",fill:false
+        }
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:"#94a3b8",font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:"#64748b",font:{size:11}},grid:{color:"#152038"}},
+        y:{ticks:{color:"#64748b",font:{size:11}},grid:{color:"#152038"},title:{display:true,text:"ساعات التشغيل",color:"#64748b",font:{size:10}},beginAtZero:true}
+      }
+    },
+    plugins:[makeTargetLinePlugin(targetHours,"الهدف ("+targetHours+" ساعات)")]
+  }),[key]);
+  return <div style={{height:260}}><canvas ref={canvasRef}/></div>;
+}
+
+// 🆕 رسم أعمدة: متوسط التشغيل اليومي لكل ماكينة (إجمالي وقتها ÷ عدد أيام الفترة) + خط الهدف
+function MachineDailyAverageBarChart({bars,targetHours}){
+  const key=bars.map(b=>b.label+":"+b.avgSeconds).join("|")+"|"+targetHours;
+  const canvasRef=useChartCanvas(()=>({
+    type:"bar",
+    data:{
+      labels:bars.map(b=>b.label),
+      datasets:[{
+        label:"متوسط التشغيل اليومي",
+        data:bars.map(b=>+(b.avgSeconds/3600).toFixed(2)),
+        backgroundColor:bars.map((_,i)=>i===0?"#38bdf8":"#a855f7"),
+        borderRadius:6,maxBarThickness:70
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{color:"#94a3b8",font:{size:11}},grid:{display:false}},
+        y:{ticks:{color:"#64748b",font:{size:11}},grid:{color:"#152038"},beginAtZero:true}
+      }
+    },
+    plugins:[makeTargetLinePlugin(targetHours,"الهدف ("+targetHours+" ساعات)")]
+  }),[key]);
+  return <div style={{height:260}}><canvas ref={canvasRef}/></div>;
+}
+
+// 🆕 جدول جلسات المشغّلين التفصيلي (صف لكل جلسة فعلية — لمطابقة التصميم المرجعي)
+function DetailedSessionsTable({sessions}){
+  const[dayFilter,setDayFilter]=useState("");
+  const days=Array.from(new Set(sessions.map(s=>s.dayName)));
+  const filtered=dayFilter?sessions.filter(s=>s.dayName===dayFilter):sessions;
+  return(
+    <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,overflow:"hidden"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 14px",borderBottom:"1px solid #1e2d4a",background:"#0f1830"}}>
+        <select value={dayFilter} onChange={e=>setDayFilter(e.target.value)}
+          style={{background:"#131b34",color:"#94a3b8",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",fontSize:12}}>
+          <option value="">تحديد يوم</option>
+          {days.map(d=>(<option key={d} value={d}>{d}</option>))}
+        </select>
+        <span style={{color:"#e06a24",fontWeight:600,fontSize:13}}>جلسات المشغّلين</span>
+      </div>
+      {filtered.length===0?(
+        <div style={{padding:20,textAlign:"center",color:"#475569",fontSize:12}}>لا توجد جلسات في هذه الفترة</div>
+      ):(
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:"#0a0e1a",color:"#64748b"}}>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>#</th>
+                <th style={{padding:"8px 12px",textAlign:"right"}}>المشغل</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>اليوم</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>التاريخ</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>وقت الدخول</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>وقت الخروج</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>المدة</th>
+                <th style={{padding:"8px 12px",textAlign:"center"}}>الماكينة المستخدمة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((s,idx)=>(
+                <tr key={s.sessionId} style={{borderBottom:"1px solid #1a2744"}}>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#64748b"}}>{idx+1}</td>
+                  <td style={{padding:"8px 12px",color:"#e2e8f0"}}>{s.name}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#94a3b8"}}>{s.dayName}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#94a3b8",fontFamily:"monospace"}}>{ddmmyyyy(s.date)}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#94a3b8",fontFamily:"monospace"}}>{s.loginTime}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#94a3b8",fontFamily:"monospace"}}>
+                    {s.logoutTime||<span style={{color:"#eab308",fontSize:10}}>مفتوحة</span>}
+                  </td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#e2e8f0",fontFamily:"monospace",fontWeight:600}}>{s.duration||"—"}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"#475569"}}>{s.machineUsed||"-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StatisticsPage({addToast,socket}){
   const[scope,setScope]=useState("week");
@@ -1734,7 +1924,10 @@ function StatisticsPage({addToast,socket}){
   const[operators,setOperators]=useState([]);
   const[mStats,setMStats]=useState(null);
   const[oStats,setOStats]=useState(null);
+  const[sessions,setSessions]=useState([]);
   const[loading,setLoading]=useState(false);
+  const[deletingKey,setDeletingKey]=useState(null); // "date:code" الجاري حذفه حاليًا
+  const DAILY_TARGET_HOURS=6; // هدف تشغيل يومي ثابت لعرضه كخط متقطّع بالرسمين (قابل للتعديل لاحقًا لو احتجت رقمًا مختلفًا)
 
   useEffect(()=>{
     // المشغّلون الحقيقيون من Users (HANDOFF §11) — وليس أسماء ثابتة بالكود
@@ -1745,11 +1938,12 @@ function StatisticsPage({addToast,socket}){
     setLoading(true);
     try{
       const base=scope==="week"?{scope,weekStart}:{scope,year,month};
-      const [ms,os]=await Promise.all([
+      const [ms,os,ss]=await Promise.all([
         Api.getMachineStats({...base,machineCode:machineCode||undefined}),
-        Api.getOperatorStats({...base,userId:userId||undefined})
+        Api.getOperatorStats({...base,userId:userId||undefined}),
+        Api.getOperatorSessions({...base,userId:userId||undefined})
       ]);
-      setMStats(ms); setOStats(os);
+      setMStats(ms); setOStats(os); setSessions((ss&&ss.sessions)||[]);
     }catch(e){
       addToast(e.message||"فشل تحميل الإحصائيات",'error');
     }finally{
@@ -1758,6 +1952,24 @@ function StatisticsPage({addToast,socket}){
   },[scope,weekStart,year,month,machineCode,userId,addToast]);
 
   useEffect(()=>{ load(); },[load]);
+
+  // 🆕 حذف/تصحيح إحصائيات ماكينة معيّنة في يوم معيّن (طلب المستخدم) — تحذير واضح
+  // + تأكيد نصّي قبل التنفيذ لأنه Destructive ولا يمكن التراجع عنه.
+  const handleDeleteDay=useCallback(async(date,code,label)=>{
+    const ok=window.confirm(`هل أنت متأكد من حذف إحصائيات "${label}" ليوم ${date}؟\nهذا الإجراء يصفّر وقت الملفات المسجَّلة في هذا اليوم لهذه الماكينة ولا يمكن التراجع عنه.`);
+    if(!ok) return;
+    const key=date+":"+code;
+    setDeletingKey(key);
+    try{
+      await Api.deleteMachineDayStats(code,date);
+      addToast("تم حذف إحصائيات "+label+" ليوم "+date,'success');
+      load();
+    }catch(e){
+      addToast(e.message||"فشل حذف الإحصائيات",'error');
+    }finally{
+      setDeletingKey(null);
+    }
+  },[addToast,load]);
 
   // 🆕 HANDOFF §13: Auto-Update عبر Socket.io الحالي (بدون إعادة بناء Socket.io — نفس الاتصال المُمرَّر من App).
   // "machine:update" يُبَث أصلاً عند أي تغيير في ملفات الماكينات (بما فيها إدخال/تعديل File Time عبر
@@ -1779,10 +1991,41 @@ function StatisticsPage({addToast,socket}){
   },[socket,load]);
 
   const maxDaily=mStats?Math.max(1,...mStats.daily.map(d=>Math.max(d.big||0,d.small||0))):1;
+  const labelByCode=mStats?Object.fromEntries(mStats.machines.map(m=>[m.code,m.label])):{};
   const bestMachine=mStats?mStats.machines.slice().sort((a,b)=>b.totalSeconds-a.totalSeconds)[0]:null;
   const totalRuntimeSeconds=mStats?mStats.machines.reduce((s,m)=>s+m.totalSeconds,0):0;
   const dailyAvgSeconds=(mStats&&mStats.daily.length>0)?Math.round(totalRuntimeSeconds/mStats.daily.length):0;
   const totalOperatorSessions=oStats?oStats.operators.reduce((s,o)=>s+o.closedSessions+o.openSessions,0):0;
+
+  // 🆕 سلسلة كاملة لكل أيام الفترة (تملأ بصفر أي يوم مفيهوش بيانات إطلاقًا) —
+  // لازمة عشان الرسم الخطي يعرض كل أيام الأسبوع/الشهر بالترتيب حتى لو يوم فاضي.
+  const fullDaily=useMemo(()=>{
+    if(!mStats) return [];
+    const byDate=Object.fromEntries(mStats.daily.map(d=>[d.date,d]));
+    let dates=[];
+    if(scope==="week"){
+      dates=DAY_ORDER.map((_,i)=>shiftDateStr(weekStart,i));
+    }else{
+      const lastDay=new Date(Date.UTC(year,month,0)).getUTCDate();
+      dates=Array.from({length:lastDay},(_,i)=>`${year}-${String(month).padStart(2,"0")}-${String(i+1).padStart(2,"0")}`);
+    }
+    return dates.map((date,i)=>({
+      date,
+      label:scope==="week"?DAY_NAME_AR[DAY_ORDER[i]]:String(i+1),
+      big:(byDate[date]&&byDate[date].big)||0,
+      small:(byDate[date]&&byDate[date].small)||0
+    }));
+  },[mStats,scope,weekStart,year,month]);
+
+  // 🆕 متوسط التشغيل اليومي لكل ماكينة = إجمالي وقتها ÷ عدد أيام الفترة كاملة
+  const avgBars=useMemo(()=>{
+    if(!mStats||fullDaily.length===0) return [];
+    return mStats.machines.map(m=>({
+      code:m.code,
+      label:m.label,
+      avgSeconds:Math.round(m.totalSeconds/fullDaily.length)
+    }));
+  },[mStats,fullDaily]);
 
   return(
     <div>
@@ -1838,14 +2081,32 @@ function StatisticsPage({addToast,socket}){
 
       {!loading&&mStats&&oStats&&(
         <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-          <StatKpiCard label="إجمالي جلسات المشغلين" value={totalOperatorSessions+" جلسة"}/>
-          <StatKpiCard label="متوسط التشغيل اليومي" value={secondsToClock(dailyAvgSeconds)}/>
-          <StatKpiCard label="إجمالي تشغيل الماكينات" value={secondsToClock(totalRuntimeSeconds)}/>
-          <StatKpiCard label="أفضل ماكينة" value={bestMachine&&bestMachine.totalSeconds>0?bestMachine.label:"—"}/>
+          <StatKpiCard label="إجمالي جلسات المشغلين" value={totalOperatorSessions+" جلسة"} icon="users" iconColor="#a855f7"/>
+          <StatKpiCard label="متوسط التشغيل اليومي" value={secondsToClock(dailyAvgSeconds)} icon="clock" iconColor="#22c55e"/>
+          <StatKpiCard label="إجمالي تشغيل الماكينات" value={secondsToClock(totalRuntimeSeconds)} icon="cog" iconColor="#38bdf8"/>
+          <StatKpiCard label="أفضل ماكينة" value={bestMachine&&bestMachine.totalSeconds>0?bestMachine.label:"—"} icon="star" iconColor="#e06a24"/>
         </div>
       )}
 
       {loading&&<div style={{padding:24,textAlign:"center",color:"#475569",fontSize:13}}>جاري التحميل...</div>}
+
+      {!loading&&mStats&&fullDaily.length>0&&(
+        <div style={{display:"flex",gap:14,marginBottom:14,flexWrap:"wrap"}}>
+          <div style={{flex:"2 1 420px",background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:14}}>
+            <div style={{color:"#e2e8f0",fontWeight:600,fontSize:13,marginBottom:10}}>ساعات تشغيل الماكينات خلال الفترة</div>
+            <WeeklyMachinesLineChart
+              dailyLabels={fullDaily.map(d=>d.label)}
+              bigSeconds={fullDaily.map(d=>d.big)}
+              smallSeconds={fullDaily.map(d=>d.small)}
+              targetHours={DAILY_TARGET_HOURS}
+              labelByCode={labelByCode}/>
+          </div>
+          <div style={{flex:"1 1 260px",background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:14}}>
+            <div style={{color:"#e2e8f0",fontWeight:600,fontSize:13,marginBottom:10}}>متوسط التشغيل اليومي لكل ماكينة</div>
+            <MachineDailyAverageBarChart bars={avgBars} targetHours={DAILY_TARGET_HOURS}/>
+          </div>
+        </div>
+      )}
 
       {!loading&&mStats&&(
         <div style={{background:"#0d1224",border:"1px solid #1e2d4a",borderRadius:12,padding:14,marginBottom:14}}>
@@ -1865,8 +2126,12 @@ function StatisticsPage({addToast,socket}){
               {mStats.daily.map(d=>(
                 <div key={d.date} style={{marginBottom:8}}>
                   <div style={{fontSize:10,color:"#64748b",marginBottom:2,fontFamily:"monospace"}}>{d.date}</div>
-                  <StatBar label="كبيرة" seconds={d.big||0} maxSeconds={maxDaily} color="#e06a24"/>
-                  <StatBar label="صغيرة" seconds={d.small||0} maxSeconds={maxDaily} color="#60a5fa"/>
+                  <StatBar label="كبيرة" seconds={d.big||0} maxSeconds={maxDaily} color="#e06a24"
+                    onDelete={()=>handleDeleteDay(d.date,"big",labelByCode.big||"الماكينة الكبيرة")}
+                    deleting={deletingKey===d.date+":big"}/>
+                  <StatBar label="صغيرة" seconds={d.small||0} maxSeconds={maxDaily} color="#60a5fa"
+                    onDelete={()=>handleDeleteDay(d.date,"small",labelByCode.small||"الماكينة الصغيرة")}
+                    deleting={deletingKey===d.date+":small"}/>
                 </div>
               ))}
             </div>
@@ -1898,6 +2163,12 @@ function StatisticsPage({addToast,socket}){
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {!loading&&(
+        <div style={{marginTop:14}}>
+          <DetailedSessionsTable sessions={sessions}/>
         </div>
       )}
     </div>
@@ -2235,6 +2506,10 @@ function App(){
           <span className="topbar-title" style={{color:"#e06a24",fontWeight:700,fontSize:14,lineHeight:1.2}}>نظام إدارة ماكينات الليزر</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,background:"#131b34",border:"1px solid #1e2d4a",borderRadius:8,padding:"5px 10px",color:"#94a3b8",fontSize:12,fontFamily:"monospace"}}>
+            <I n="cal" s={14}/>
+            <span>{todayDateStr()}</span>
+          </div>
           <div style={{position:"relative"}}>
             <button onClick={()=>ssN(p=>!p)} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",position:"relative",display:"flex",padding:4}}>
               <I n="bell" s={20}/>
@@ -2259,7 +2534,7 @@ function App(){
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
             {DAY_ORDER.map(d=>(
               <button key={d} onClick={()=>setDayName(d)}
-                style={{background:dayName===d?"#7c3aed":"#131b34",color:dayName===d?"#fff":"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s"}}>
+                style={{background:dayName===d?"#e06a24":"#131b34",color:dayName===d?"#fff":"#94a3b8",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s"}}>
                 {DAY_NAME_AR[d]}
               </button>
             ))}
@@ -2381,6 +2656,12 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  });
+}
 </script>
 </body>
 </html>

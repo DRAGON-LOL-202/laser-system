@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>رفع ملف مشارك — نظام الليزر</title>
+<link rel="icon" href="./assets/logo-mark.png" type="image/png">
+<script src="./config.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0e1a;color:#e2e8f0;font-family:"Segoe UI",Tahoma,Arial,sans-serif;
+       min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;}
+  .card{background:#0d1224;border:1px solid #1e2d4a;border-radius:14px;padding:20px;max-width:420px;width:100%;}
+  h1{font-size:17px;margin-bottom:16px;color:#f1f5f9;}
+  .file-box{background:#0a0e1a;border:1px dashed #2a3b5e;border-radius:10px;padding:14px;margin-bottom:16px;
+             font-size:13px;color:#94a3b8;word-break:break-all;}
+  .file-box b{color:#e2e8f0;display:block;margin-bottom:4px;font-size:14px;}
+  label{display:block;font-size:13px;color:#94a3b8;margin:12px 0 6px;}
+  select,input{width:100%;background:#0a0e1a;border:1px solid #1e2d4a;color:#e2e8f0;
+               border-radius:8px;padding:10px;font-size:14px;}
+  input[type=file]{padding:8px;font-size:12px;}
+  button{width:100%;margin-top:18px;padding:12px;border:none;border-radius:9px;
+         background:#e06a24;color:#fff;font-size:15px;font-weight:600;cursor:pointer;}
+  button:disabled{opacity:0.5;cursor:not-allowed;}
+  .msg{margin-top:14px;font-size:13px;padding:10px;border-radius:8px;display:none;}
+  .msg.err{background:#3a1520;color:#fca5a5;display:block;}
+  .msg.ok{background:#12321f;color:#86efac;display:block;}
+  .msg.info{background:#0f1830;color:#93c5fd;display:block;}
+  a.back{display:inline-block;margin-top:14px;color:#93c5fd;font-size:13px;text-decoration:none;}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #ffffff55;border-top-color:#fff;
+        border-radius:50%;animation:sp 0.7s linear infinite;vertical-align:middle;margin-left:8px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  details{margin-top:16px;font-size:11px;color:#64748b;}
+  summary{cursor:pointer;color:#93c5fd;}
+  #debugBox{margin-top:8px;background:#000;border-radius:6px;padding:8px;white-space:pre-wrap;
+            font-family:monospace;font-size:10px;color:#94a3b8;direction:ltr;text-align:left;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>رفع ملف إلى نظام الليزر</h1>
+  <div id="fileBox" class="file-box">جارٍ الفحص...</div>
+
+  <div id="manualPick">
+    <label>لو الملف مش ظاهر فوق، اختاره يدويًا هنا:</label>
+    <input type="file" id="manualFile" accept=".dxf,.svg,.ai,.dwg,.pdf,.png,.jpg,.jpeg,.crv3d,image/*,application/pdf">
+  </div>
+
+  <div id="formArea" style="display:none">
+    <label>الماكينة</label>
+    <select id="machineSel">
+      <option value="big">الماكينة الكبيرة</option>
+      <option value="small">الماكينة الصغيرة</option>
+    </select>
+
+    <label>الأسبوع / اليوم</label>
+    <select id="daySel"></select>
+
+    <label>وقت الملف (اختياري — HH:MM:SS)</label>
+    <input id="timeInput" placeholder="00:00:00">
+
+    <button id="submitBtn">رفع الملف</button>
+  </div>
+
+  <div id="msg" class="msg"></div>
+  <a class="back" href="./index.html">فتح الموقع الرئيسي</a>
+
+  <details>
+    <summary>تفاصيل تقنية (لو المشكلة اتكررت، ابعت لقطة شاشة من هنا)</summary>
+    <div id="debugBox">جارٍ الجمع...</div>
+  </details>
+</div>
+
+<script>
+const API_BASE = window.APP_CONFIG.API_BASE;
+const DAY_AR = {fri:"الجمعة",sat:"السبت",sun:"الأحد",mon:"الإثنين",tue:"الثلاثاء",wed:"الأربعاء",thu:"الخميس"};
+
+const fileBox = document.getElementById('fileBox');
+const formArea = document.getElementById('formArea');
+const msg = document.getElementById('msg');
+const daySel = document.getElementById('daySel');
+const machineSel = document.getElementById('machineSel');
+const submitBtn = document.getElementById('submitBtn');
+const manualFile = document.getElementById('manualFile');
+const debugBox = document.getElementById('debugBox');
+
+let sharedFile = null;
+const debug = {};
+
+function renderDebug(){
+  debugBox.textContent = Object.entries(debug).map(([k,v]) => k + ': ' + v).join('\n');
+}
+
+function showMsg(text, type){
+  msg.className = 'msg ' + type;
+  msg.textContent = text;
+}
+
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req = indexedDB.open('laser-share-target', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('pending-file'); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadSharedFileFromDB(){
+  const db = await openDB();
+  const file = await new Promise((resolve,reject)=>{
+    const tx = db.transaction('pending-file','readonly');
+    const req = tx.objectStore('pending-file').get('current');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return file;
+}
+
+function setFile(file, source){
+  sharedFile = file;
+  if(file){
+    fileBox.innerHTML = '<b>' + file.name + '</b>' + (file.size/1024).toFixed(0) + ' KB (' + source + ')';
+    loadDaysAndShowForm();
+  }
+}
+
+async function loadDaysAndShowForm(){
+  const token = localStorage.getItem('laser_token');
+  try{
+    const res = await fetch(API_BASE + '/api/work/grid', { headers: { 'Authorization': 'Bearer ' + token } });
+    if(!res.ok) throw new Error('grid');
+    const grid = await res.json();
+    daySel.innerHTML = '';
+    grid.forEach(week => {
+      week.days.forEach(day => {
+        const opt = document.createElement('option');
+        opt.value = day.id;
+        opt.textContent = 'الأسبوع ' + week.weekNumber + ' — ' + (DAY_AR[day.dayName] || day.dayName);
+        daySel.appendChild(opt);
+      });
+    });
+    formArea.style.display = 'block';
+  }catch(e){
+    showMsg('تعذّر تحميل قائمة الأيام. تأكد إن الجلسة لسه صالحة.', 'err');
+  }
+}
+
+manualFile.addEventListener('change', () => {
+  if(manualFile.files[0]) setFile(manualFile.files[0], 'اختيار يدوي');
+});
+
+async function init(){
+  const params = new URLSearchParams(location.search);
+  debug['رابط الصفحة فيه ?shared=1'] = params.get('shared') === '1' ? 'نعم' : 'لا — الصفحة اتفتحت عادي مش عن طريق مشاركة';
+  debug['Service Worker مسجّل'] = ('serviceWorker' in navigator) ? 'مدعوم' : 'غير مدعوم في المتصفح ده';
+  debug['Service Worker بيتحكم في الصفحة دي'] = navigator.serviceWorker && navigator.serviceWorker.controller ? 'نعم' : 'لا';
+
+  const token = localStorage.getItem('laser_token');
+  debug['مسجّل دخول'] = token ? 'نعم' : 'لا';
+  if(!token){
+    fileBox.textContent = 'محتاج تسجّل دخول في الموقع الرئيسي الأول.';
+    showMsg('افتح "الموقع الرئيسي" من الرابط تحت، سجّل دخولك، وبعدها جرّب المشاركة تاني.', 'err');
+    renderDebug();
+    return;
+  }
+
+  if(params.get('shared') === '1'){
+    try{
+      const file = await loadSharedFileFromDB();
+      debug['الملف موجود في IndexedDB'] = file ? ('نعم — ' + file.name) : 'لا — الـ Service Worker ماحفظش الملف';
+
+      try{
+        const db = await openDB();
+        const swLog = await new Promise((resolve,reject)=>{
+          const tx = db.transaction('pending-file','readonly');
+          const req = tx.objectStore('pending-file').get('debug');
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        if(swLog) debug['سجل الـ Service Worker'] = JSON.stringify(swLog);
+      }catch(e){}
+
+      if(file){
+        setFile(file, 'مشاركة تلقائية');
+        renderDebug();
+        return;
+      }
+    }catch(e){
+      debug['خطأ IndexedDB'] = e.message || String(e);
+    }
+  }
+
+  fileBox.innerHTML = '<b>لم يُستلَم الملف تلقائيًا</b>استخدم "اختر الملف يدويًا" تحت واختار نفس الملف من التخزين.';
+  renderDebug();
+}
+
+submitBtn.addEventListener('click', async () => {
+  const token = localStorage.getItem('laser_token');
+  const code = machineSel.value;
+  const workDayId = daySel.value;
+  const time = document.getElementById('timeInput').value.trim();
+
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = 'جارٍ الرفع...<span class="spin"></span>';
+
+  const fd = new FormData();
+  fd.append('file', sharedFile, sharedFile.name);
+  fd.append('workDayId', workDayId);
+  if(time) fd.append('time', time);
+
+  try{
+    const res = await fetch(API_BASE + '/api/machines/' + code + '/files/upload', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: fd
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'فشل الرفع');
+    showMsg('تم رفع الملف بنجاح ✅', 'ok');
+    formArea.style.display = 'none';
+  }catch(e){
+    showMsg('خطأ: ' + e.message, 'err');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'رفع الملف';
+  }
+});
+
+init();
+</script>
+</body>
+</html>
