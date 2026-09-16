@@ -18,6 +18,7 @@
   label{display:block;font-size:13px;color:#94a3b8;margin:12px 0 6px;}
   select,input{width:100%;background:#0a0e1a;border:1px solid #1e2d4a;color:#e2e8f0;
                border-radius:8px;padding:10px;font-size:14px;}
+  input[type=file]{padding:8px;font-size:12px;}
   button{width:100%;margin-top:18px;padding:12px;border:none;border-radius:9px;
          background:#e06a24;color:#fff;font-size:15px;font-weight:600;cursor:pointer;}
   button:disabled{opacity:0.5;cursor:not-allowed;}
@@ -29,12 +30,21 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid #ffffff55;border-top-color:#fff;
         border-radius:50%;animation:sp 0.7s linear infinite;vertical-align:middle;margin-left:8px;}
   @keyframes sp{to{transform:rotate(360deg);}}
+  details{margin-top:16px;font-size:11px;color:#64748b;}
+  summary{cursor:pointer;color:#93c5fd;}
+  #debugBox{margin-top:8px;background:#000;border-radius:6px;padding:8px;white-space:pre-wrap;
+            font-family:monospace;font-size:10px;color:#94a3b8;direction:ltr;text-align:left;}
 </style>
 </head>
 <body>
 <div class="card">
   <h1>رفع ملف إلى نظام الليزر</h1>
-  <div id="fileBox" class="file-box">جارٍ استلام الملف...</div>
+  <div id="fileBox" class="file-box">جارٍ الفحص...</div>
+
+  <div id="manualPick">
+    <label>لو الملف مش ظاهر فوق، اختاره يدويًا هنا:</label>
+    <input type="file" id="manualFile" accept=".dxf,.svg,.ai,.dwg,.pdf,.png,.jpg,.jpeg,.crv3d,image/*,application/pdf">
+  </div>
 
   <div id="formArea" style="display:none">
     <label>الماكينة</label>
@@ -54,6 +64,11 @@
 
   <div id="msg" class="msg"></div>
   <a class="back" href="./index.html">فتح الموقع الرئيسي</a>
+
+  <details>
+    <summary>تفاصيل تقنية (لو المشكلة اتكررت، ابعت لقطة شاشة من هنا)</summary>
+    <div id="debugBox">جارٍ الجمع...</div>
+  </details>
 </div>
 
 <script>
@@ -66,8 +81,15 @@ const msg = document.getElementById('msg');
 const daySel = document.getElementById('daySel');
 const machineSel = document.getElementById('machineSel');
 const submitBtn = document.getElementById('submitBtn');
+const manualFile = document.getElementById('manualFile');
+const debugBox = document.getElementById('debugBox');
 
 let sharedFile = null;
+const debug = {};
+
+function renderDebug(){
+  debugBox.textContent = Object.entries(debug).map(([k,v]) => k + ': ' + v).join('\n');
+}
 
 function showMsg(text, type){
   msg.className = 'msg ' + type;
@@ -83,12 +105,7 @@ function openDB(){
   });
 }
 
-async function loadSharedFile(){
-  const params = new URLSearchParams(location.search);
-  if(params.get('shared') !== '1'){
-    fileBox.textContent = 'افتح هذه الصفحة عن طريق مشاركة ملف من واتساب أو أي تطبيق آخر.';
-    return null;
-  }
+async function loadSharedFileFromDB(){
   const db = await openDB();
   const file = await new Promise((resolve,reject)=>{
     const tx = db.transaction('pending-file','readonly');
@@ -100,28 +117,16 @@ async function loadSharedFile(){
   return file;
 }
 
-async function init(){
+function setFile(file, source){
+  sharedFile = file;
+  if(file){
+    fileBox.innerHTML = '<b>' + file.name + '</b>' + (file.size/1024).toFixed(0) + ' KB (' + source + ')';
+    loadDaysAndShowForm();
+  }
+}
+
+async function loadDaysAndShowForm(){
   const token = localStorage.getItem('laser_token');
-  if(!token){
-    fileBox.textContent = 'محتاج تسجّل دخول في الموقع الرئيسي الأول.';
-    showMsg('افتح "الموقع الرئيسي" من الرابط تحت، سجّل دخولك، وبعدها جرّب المشاركة تاني.', 'err');
-    return;
-  }
-
-  try{
-    sharedFile = await loadSharedFile();
-  }catch(e){
-    sharedFile = null;
-  }
-
-  if(!sharedFile){
-    fileBox.innerHTML = '<b>لم يُستلَم أي ملف</b>جرّب تعمل مشاركة الملف تاني من واتساب.';
-    return;
-  }
-
-  fileBox.innerHTML = '<b>' + sharedFile.name + '</b>' + (sharedFile.size/1024).toFixed(0) + ' KB';
-
-  // تحميل شبكة الأيام (الأسابيع × الأيام) من نفس الـ API الموجود في الباك إند
   try{
     const res = await fetch(API_BASE + '/api/work/grid', { headers: { 'Authorization': 'Bearer ' + token } });
     if(!res.ok) throw new Error('grid');
@@ -139,6 +144,56 @@ async function init(){
   }catch(e){
     showMsg('تعذّر تحميل قائمة الأيام. تأكد إن الجلسة لسه صالحة.', 'err');
   }
+}
+
+manualFile.addEventListener('change', () => {
+  if(manualFile.files[0]) setFile(manualFile.files[0], 'اختيار يدوي');
+});
+
+async function init(){
+  const params = new URLSearchParams(location.search);
+  debug['رابط الصفحة فيه ?shared=1'] = params.get('shared') === '1' ? 'نعم' : 'لا — الصفحة اتفتحت عادي مش عن طريق مشاركة';
+  debug['Service Worker مسجّل'] = ('serviceWorker' in navigator) ? 'مدعوم' : 'غير مدعوم في المتصفح ده';
+  debug['Service Worker بيتحكم في الصفحة دي'] = navigator.serviceWorker && navigator.serviceWorker.controller ? 'نعم' : 'لا';
+
+  const token = localStorage.getItem('laser_token');
+  debug['مسجّل دخول'] = token ? 'نعم' : 'لا';
+  if(!token){
+    fileBox.textContent = 'محتاج تسجّل دخول في الموقع الرئيسي الأول.';
+    showMsg('افتح "الموقع الرئيسي" من الرابط تحت، سجّل دخولك، وبعدها جرّب المشاركة تاني.', 'err');
+    renderDebug();
+    return;
+  }
+
+  if(params.get('shared') === '1'){
+    try{
+      const file = await loadSharedFileFromDB();
+      debug['الملف موجود في IndexedDB'] = file ? ('نعم — ' + file.name) : 'لا — الـ Service Worker ماحفظش الملف';
+
+      try{
+        const db = await openDB();
+        const swLog = await new Promise((resolve,reject)=>{
+          const tx = db.transaction('pending-file','readonly');
+          const req = tx.objectStore('pending-file').get('debug');
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        if(swLog) debug['سجل الـ Service Worker'] = JSON.stringify(swLog);
+      }catch(e){}
+
+      if(file){
+        setFile(file, 'مشاركة تلقائية');
+        renderDebug();
+        return;
+      }
+    }catch(e){
+      debug['خطأ IndexedDB'] = e.message || String(e);
+    }
+  }
+
+  fileBox.innerHTML = '<b>لم يُستلَم الملف تلقائيًا</b>استخدم "اختر الملف يدويًا" تحت واختار نفس الملف من التخزين.';
+  renderDebug();
 }
 
 submitBtn.addEventListener('click', async () => {

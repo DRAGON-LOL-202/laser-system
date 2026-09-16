@@ -29,6 +29,22 @@ async function saveSharedFile(file) {
   db.close();
 }
 
+// بيسجّل آخر محاولة مشاركة (نجحت أو فشلت) عشان نقدر نشخّص المشكلة من صفحة share-target.html
+async function saveDebugInfo(info) {
+  try {
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(info, 'debug');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch (e) {
+    // تجاهل — التشخيص نفسه مش لازم يوقف عملية المشاركة
+  }
+}
+
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
@@ -43,15 +59,23 @@ self.addEventListener('fetch', (event) => {
   // اعتراض طلب المشاركة فقط (POST على share-target.html) — أي طلب تاني يمر عادي بدون تدخل
   if (event.request.method === 'POST' && url.pathname.endsWith('/share-target.html')) {
     event.respondWith((async () => {
+      const log = { time: new Date().toISOString(), step: 'بدأ الاعتراض' };
       try {
         const formData = await event.request.formData();
+        log.step = 'قرأ formData بنجاح';
+        log.keys = Array.from(formData.keys()).join(', ') || '(فاضي)';
         const file = formData.get('sharedFile');
         if (file) {
+          log.step = 'لقى الملف: ' + file.name + ' (' + file.size + ' بايت)';
           await saveSharedFile(file);
+          log.step = 'اتحفظ في IndexedDB بنجاح';
+        } else {
+          log.step = 'formData وصلت لكن مفيش حقل sharedFile فيها';
         }
       } catch (e) {
-        // نتجاهل الخطأ هنا ونسيب share-target.html نفسها تعرض رسالة "لم يُستلَم ملف"
+        log.step = 'خطأ: ' + (e && e.message ? e.message : String(e));
       }
+      await saveDebugInfo(log);
       return Response.redirect('./share-target.html?shared=1', 303);
     })());
   }
